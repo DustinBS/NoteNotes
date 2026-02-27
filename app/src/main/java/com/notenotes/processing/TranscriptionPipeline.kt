@@ -22,15 +22,116 @@ class TranscriptionPipeline(
     private val sampleRate: Int = 44100,
     private val defaultTempoBpm: Int = 120,
     private val minNoteConfidence: Double = 0.3,   // minimum confidence to keep a note (lowered for real audio)
-    private val samePitchMergeGapMs: Double = 100.0 // max gap between same-pitch notes to merge
+    private val samePitchMergeGapMs: Double = 100.0, // max gap between same-pitch notes to merge
+    private val pitchAlgorithm: PitchAlgorithm = PitchAlgorithm.DEFAULT
 ) {
 
-    private val pitchDetector = YinPitchDetector(sampleRate = sampleRate)
+    private val pitchDetector: Any = createPitchDetector()
     private val polyphonicDetector = PolyphonicPitchDetector(sampleRate = sampleRate)
     private val onsetDetector = OnsetDetector(sampleRate = sampleRate)
     private val keyDetector = KeyDetector()
     private val timeSignatureDetector = TimeSignatureDetector(sampleRate = sampleRate)
     private val rhythmQuantizer = RhythmQuantizer()
+
+    /**
+     * Create the appropriate pitch detector(s) based on the selected algorithm.
+     * For CONSENSUS mode, we create all three and vote.
+     */
+    private fun createPitchDetector(): Any {
+        return when (pitchAlgorithm) {
+            PitchAlgorithm.YIN -> YinPitchDetector(sampleRate = sampleRate)
+            PitchAlgorithm.MPM -> McLeodPitchDetector(sampleRate = sampleRate)
+            PitchAlgorithm.HPS -> HpsPitchDetector(sampleRate = sampleRate)
+            PitchAlgorithm.CONSENSUS -> listOf(
+                YinPitchDetector(sampleRate = sampleRate),
+                McLeodPitchDetector(sampleRate = sampleRate),
+                HpsPitchDetector(sampleRate = sampleRate)
+            )
+        }
+    }
+
+    /**
+     * Detect pitches using the selected algorithm.
+     * For CONSENSUS, runs all three and does per-frame majority voting.
+     */
+    private fun detectPitchesWithAlgorithm(samples: ShortArray): List<PitchDetectionResult> {
+        Log.d(TAG, "detectPitchesWithAlgorithm: using ${pitchAlgorithm.displayName}")
+        return when (pitchAlgorithm) {
+            PitchAlgorithm.YIN -> (pitchDetector as YinPitchDetector).detectPitches(samples)
+            PitchAlgorithm.MPM -> (pitchDetector as McLeodPitchDetector).detectPitches(samples)
+            PitchAlgorithm.HPS -> (pitchDetector as HpsPitchDetector).detectPitches(samples)
+            PitchAlgorithm.CONSENSUS -> {
+                @Suppress("UNCHECKED_CAST")
+                val detectors = pitchDetector as List<Any>
+                val yinResults = (detectors[0] as YinPitchDetector).detectPitches(samples)
+                val mpmResults = (detectors[1] as McLeodPitchDetector).detectPitches(samples)
+                val hpsResults = (detectors[2] as HpsPitchDetector).detectPitches(samples)
+                consensusVote(yinResults, mpmResults, hpsResults)
+            }
+        }
+    }
+
+    /**
+     * Per-frame majority vote across three algorithm outputs.
+     * Uses time-aligned frames; when algorithms agree (within ±1 semitone), 
+     * picks the result with highest confidence.
+     */
+    private fun consensusVote(
+        yin: List<PitchDetectionResult>,
+        mpm: List<PitchDetectionResult>,
+        hps: List<PitchDetectionResult>
+    ): List<PitchDetectionResult> {
+        val maxLen = maxOf(yin.size, mpm.size, hps.size)
+        val result = mutableListOf<PitchDetectionResult>()
+
+        for (i in 0 until maxLen) {
+            val yf = yin.getOrNull(i)
+            val mf = mpm.getOrNull(i)
+            val hf = hps.getOrNull(i)
+
+            val candidates = listOfNotNull(yf, mf, hf).filter { it.isPitched }
+
+            if (candidates.isEmpty()) {
+                // All unpitched — use YIN's frame as the unpitched marker
+                result.add(yf ?: mf ?: hf ?: continue)
+                continue
+            }
+
+            if (candidates.size == 1) {
+                // Only one algorithm heard a pitch — use it but downweight confidence
+                val c = candidates[0]
+                result.add(c.copy(confidence = c.confidence * 0.7))
+                continue
+            }
+
+            // 2+ pitched: find agreement by MIDI note grouping (±1 semitone)
+            val midiGroups = mutableMapOf<Int, MutableList<PitchDetectionResult>>()
+            for (c in candidates) {
+                val midi = PitchUtils.frequencyToMidi(c.frequencyHz)
+                val matchGroup = midiGroups.keys.find { kotlin.math.abs(it - midi) <= 1 }
+                if (matchGroup != null) {
+                    midiGroups[matchGroup]!!.add(c)
+                } else {
+                    midiGroups[midi] = mutableListOf(c)
+                }
+            }
+
+            // Pick the largest group (majority), break ties by total confidence
+            val bestGroup = midiGroups.values
+                .sortedWith(compareByDescending<List<PitchDetectionResult>> { it.size }
+                    .thenByDescending { grp -> grp.sumOf { it.confidence } })
+                .first()
+
+            // From the best group, pick the individual result with highest confidence
+            val best = bestGroup.maxByOrNull { it.confidence }!!
+            // Boost confidence when algorithms agree
+            val boostFactor = if (bestGroup.size >= 2) 1.0 else 0.8
+            result.add(best.copy(confidence = (best.confidence * boostFactor).coerceAtMost(1.0)))
+        }
+
+        Log.d(TAG, "consensusVote: ${result.size} frames, ${result.count { it.isPitched }} pitched")
+        return result
+    }
 
     /**
      * Process raw PCM audio samples and produce a transcription.
@@ -55,8 +156,8 @@ class TranscriptionPipeline(
         }
 
         // Step 1: Detect pitches (with octave correction)
-        Log.d(TAG, "process: Step 1 - Pitch detection...")
-        val pitchResults = pitchDetector.detectPitches(samples)
+        Log.d(TAG, "process: Step 1 - Pitch detection using ${pitchAlgorithm.displayName}...")
+        val pitchResults = detectPitchesWithAlgorithm(samples)
         val pitchedFrames = pitchResults.filter { it.isPitched }
         Log.d(TAG, "process: Step 1 done - ${pitchResults.size} total frames, ${pitchedFrames.size} pitched")
 
@@ -258,9 +359,9 @@ class TranscriptionPipeline(
             )
 
             if (segmentEndSample - segmentStartSample < 512) {
-                // Too short for FFT — fall back to YIN
-                val yinNote = buildYinNote(pitchedFrames, startTime, endTime)
-                if (yinNote != null) notes.add(yinNote)
+                // Too short for FFT — fall back to frame-based pitch
+                val frameNote = buildNoteFromFrames(pitchedFrames, startTime, endTime)
+                if (frameNote != null) notes.add(frameNote)
                 continue
             }
 
@@ -295,13 +396,13 @@ class TranscriptionPipeline(
                     Log.d(TAG, "process: Chord at ${String.format("%.3f", startTime)}s: " +
                             "${chord?.name ?: "?"} = ${allMidi.map { PitchUtils.midiToNoteName(it) }}")
                 } else {
-                    // Only 1 strong pitch — treat as single note, fall through to YIN cross-check
+                    // Only 1 strong pitch — treat as single note, cross-check with frame detection
                     val singlePitch = strongPitches.first()
-                    val yinNote = buildYinNote(pitchedFrames, startTime, endTime)
-                    if (yinNote != null && kotlin.math.abs(yinNote.midiNote - singlePitch.midiNote) <= 1) {
-                        notes.add(yinNote)
-                    } else if (yinNote != null) {
-                        notes.add(yinNote) // Prefer YIN for single notes
+                    val frameNote = buildNoteFromFrames(pitchedFrames, startTime, endTime)
+                    if (frameNote != null && kotlin.math.abs(frameNote.midiNote - singlePitch.midiNote) <= 1) {
+                        notes.add(frameNote)
+                    } else if (frameNote != null) {
+                        notes.add(frameNote) // Prefer frame-based detection for single notes
                     } else {
                         notes.add(DetectedNote(
                             midiNote = singlePitch.midiNote,
@@ -313,14 +414,14 @@ class TranscriptionPipeline(
                     }
                 }
             } else if (polyResult.pitches.size == 1) {
-                // Single note from FFT — cross-check with YIN for better accuracy
+                // Single note from FFT — cross-check with frame-based pitch for accuracy
                 val fftNote = polyResult.pitches[0]
-                val yinNote = buildYinNote(pitchedFrames, startTime, endTime)
+                val frameNote = buildNoteFromFrames(pitchedFrames, startTime, endTime)
 
-                if (yinNote != null && kotlin.math.abs(yinNote.midiNote - fftNote.midiNote) <= 1) {
-                    // YIN and FFT agree — prefer YIN (more accurate for single notes)
-                    notes.add(yinNote)
-                } else if (yinNote != null) {
+                if (frameNote != null && kotlin.math.abs(frameNote.midiNote - fftNote.midiNote) <= 1) {
+                    // Frame detection and FFT agree — prefer frame detection (more accurate for single notes)
+                    notes.add(frameNote)
+                } else if (frameNote != null) {
                     // Disagree — prefer whichever has higher confidence
                     notes.add(if (fftNote.confidence > 0.5) DetectedNote(
                         midiNote = fftNote.midiNote,
@@ -328,7 +429,7 @@ class TranscriptionPipeline(
                         onsetSeconds = startTime,
                         durationSeconds = endTime - startTime,
                         confidence = fftNote.confidence
-                    ) else yinNote)
+                    ) else frameNote)
                 } else {
                     notes.add(DetectedNote(
                         midiNote = fftNote.midiNote,
@@ -339,9 +440,9 @@ class TranscriptionPipeline(
                     ))
                 }
             } else {
-                // FFT found nothing — try YIN
-                val yinNote = buildYinNote(pitchedFrames, startTime, endTime)
-                if (yinNote != null) notes.add(yinNote)
+                // FFT found nothing — try frame-based pitch detection
+                val frameNote = buildNoteFromFrames(pitchedFrames, startTime, endTime)
+                if (frameNote != null) notes.add(frameNote)
             }
         }
 
@@ -349,10 +450,11 @@ class TranscriptionPipeline(
     }
 
     /**
-     * Build a single DetectedNote from YIN pitch frames within a time window.
+     * Build a single DetectedNote from pitch frames within a time window.
      * Uses confidence-weighted median frequency.
+     * Works with frames from any algorithm (YIN, MPM, HPS, or consensus).
      */
-    private fun buildYinNote(
+    private fun buildNoteFromFrames(
         pitchedFrames: List<PitchDetectionResult>,
         startTime: Double,
         endTime: Double

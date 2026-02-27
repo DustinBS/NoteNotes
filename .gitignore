@@ -3,6 +3,7 @@ Plans/
 test_audio_files/
 test_audio_wav/
 *.wav
+*.py
 
 # Built application files
 *.apk

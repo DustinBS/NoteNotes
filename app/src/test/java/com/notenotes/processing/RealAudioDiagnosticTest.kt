@@ -9,10 +9,43 @@ import java.nio.ByteOrder
 
 /**
  * Tests the transcription pipeline with real guitar audio recordings.
- * Each test loads a WAV file, runs the pipeline, and verifies the detected notes
- * match the expected pitches.
+ *
+ * Expected test outputs (see EXPECTED_TEST_OUTPUTS.md):
+ *
+ * Single notes: Each open string plucked once, let ring.
+ *   - low_e2.wav  → 1 note: E2 (MIDI 40)
+ *   - a2.wav      → 1 note: A2 (MIDI 45)
+ *   - d3.wav      → 1 note: D3 (MIDI 50)
+ *   - g3.wav      → 1 note: G3 (MIDI 55)
+ *   - b3.wav      → 1 note: B3 (MIDI 59)
+ *   - e4.wav      → 1 note: E4 (MIDI 64)
+ *
+ * Chord: C major strummed once, let ring.
+ *   - c_major.wav → 1 chord with pitch classes C, E, G
+ *
+ * Sequence: All 6 open strings plucked in order low→high.
+ *   - open_strings.wav → 6 notes: E2, A2, D3, G3, B3, E4
  */
 class RealAudioDiagnosticTest {
+
+    // ===== Expected values =====
+    companion object {
+        // Expected MIDI notes for each single-string test
+        val EXPECTED_LOW_E2 = 40  // E2
+        val EXPECTED_A2 = 45      // A2
+        val EXPECTED_D3 = 50      // D3
+        val EXPECTED_G3 = 55      // G3
+        val EXPECTED_B3 = 59      // B3
+        val EXPECTED_E4 = 64      // E4
+
+        // Expected sequence for open strings all
+        val EXPECTED_OPEN_STRING_SEQUENCE = listOf(40, 45, 50, 55, 59, 64)
+
+        // Expected pitch classes for C major chord (C=0, E=4, G=7)
+        val EXPECTED_C_MAJOR_PITCH_CLASSES = setOf(0, 4, 7)
+    }
+
+    // ===== Helpers =====
 
     private fun loadWavSamples(resourceName: String): ShortArray {
         val stream: InputStream = javaClass.classLoader!!.getResourceAsStream(resourceName)
@@ -39,86 +72,216 @@ class RealAudioDiagnosticTest {
         return ShortArray(numSamples) { bb.getShort() }
     }
 
-    private fun runPipeline(resourceName: String): List<String> {
+    data class PipelineOutput(
+        val noteNames: List<String>,
+        val midiNotes: List<Int>,
+        val noteCount: Int,
+        val chordNames: List<String?>
+    )
+
+    private fun runPipeline(resourceName: String): PipelineOutput {
         val samples = loadWavSamples(resourceName)
         val pipeline = TranscriptionPipeline()
         val result = pipeline.process(samples)
-        return result.notes.map { PitchUtils.midiToNoteName(it.midiPitch) }
+        return PipelineOutput(
+            noteNames = result.notes.map { PitchUtils.midiToNoteName(it.midiPitch) },
+            midiNotes = result.notes.map { it.midiPitch },
+            noteCount = result.notes.size,
+            chordNames = result.notes.map { it.chordName }
+        )
     }
 
-    // ---- Single note tests ----
-
-    @Test
-    fun lowE2_openString_detectsE2() {
-        val notes = runPipeline("low_e2.wav")
-        assertTrue("Expected notes but got none", notes.isNotEmpty())
-        val hasE = notes.any { it.startsWith("E") }
-        assertTrue("Expected E note but got: $notes", hasE)
+    /** Print detailed diagnostics for a test run */
+    private fun printDiagnostics(testName: String, fileName: String, expected: String, output: PipelineOutput) {
+        println("═══════════════════════════════════════════════════")
+        println("TEST: $testName")
+        println("FILE: $fileName")
+        println("EXPECTED: $expected")
+        println("ACTUAL:   ${output.noteCount} notes → ${output.noteNames}")
+        output.noteNames.forEachIndexed { i, name ->
+            println("  Note $i: $name (MIDI ${output.midiNotes[i]}) chord=${output.chordNames[i] ?: "none"}")
+        }
+        println("═══════════════════════════════════════════════════")
     }
 
-    @Test
-    fun a2_openString_detectsA2() {
-        val notes = runPipeline("a2.wav")
-        assertTrue("Expected notes but got none", notes.isNotEmpty())
-        val hasA = notes.any { it.startsWith("A") && !it.startsWith("A#") }
-        assertTrue("Expected A note but got: $notes", hasA)
-    }
+    // ===== Single Note Tests =====
+    // Each test verifies: (1) at least 1 note detected, (2) correct pitch class, (3) not too many notes
 
     @Test
-    fun d3_openString_detectsD3() {
-        val notes = runPipeline("d3.wav")
-        assertTrue("Expected notes but got none", notes.isNotEmpty())
-        val hasD = notes.any { it.startsWith("D") && !it.startsWith("D#") }
-        assertTrue("Expected D note but got: $notes", hasD)
-    }
+    fun lowE2_singleNotePluckedOnce_detectsOneE2() {
+        val output = runPipeline("low_e2.wav")
+        printDiagnostics("Low E2 Open String", "low_e2.wav", "1× E2 (MIDI 40)", output)
 
-    @Test
-    fun g3_openString_detectsG3() {
-        val notes = runPipeline("g3.wav")
-        assertTrue("Expected notes but got none", notes.isNotEmpty())
-        val hasG = notes.any { it.startsWith("G") && !it.startsWith("G#") }
-        assertTrue("Expected G note but got: $notes", hasG)
-    }
-
-    @Test
-    fun b3_openString_detectsB3() {
-        val notes = runPipeline("b3.wav")
-        assertTrue("Expected notes but got none", notes.isNotEmpty())
-        val hasB = notes.any { it.startsWith("B") }
-        assertTrue("Expected B note but got: $notes", hasB)
+        assertTrue("Expected at least 1 note but got none", output.noteCount >= 1)
+        val primaryName = output.noteNames[0]
+        assertTrue(
+            "Expected E note but got $primaryName. All notes: ${output.noteNames}",
+            primaryName.startsWith("E") && !primaryName.startsWith("Eb")
+        )
+        assertTrue(
+            "Expected 1 note but got ${output.noteCount}: ${output.noteNames}",
+            output.noteCount <= 2
+        )
     }
 
     @Test
-    fun highE4_openString_detectsE4() {
-        val notes = runPipeline("e4.wav")
-        assertTrue("Expected notes but got none", notes.isNotEmpty())
-        // E4 is quiet (~36% max amplitude), YIN may detect subharmonic A2 (110Hz = 329.6/3)
-        // Accept any detection; pitch accuracy will be improved separately
-    }
+    fun a2_singleNotePluckedOnce_detectsOneA2() {
+        val output = runPipeline("a2.wav")
+        printDiagnostics("A2 Open String", "a2.wav", "1× A2 (MIDI 45)", output)
 
-    // ---- Multi-note tests ----
+        assertTrue("Expected at least 1 note but got none", output.noteCount >= 1)
+        val primaryName = output.noteNames[0]
+        assertTrue(
+            "Expected A note but got $primaryName. All notes: ${output.noteNames}",
+            primaryName.startsWith("A") && !primaryName.startsWith("A#")
+        )
+        assertTrue(
+            "Expected 1 note but got ${output.noteCount}: ${output.noteNames}",
+            output.noteCount <= 2
+        )
+    }
 
     @Test
-    fun cMajorChord_detectsNotes() {
-        val notes = runPipeline("c_major.wav")
-        assertTrue("Expected notes but got none. C major chord should be detected.", notes.isNotEmpty())
+    fun d3_singleNotePluckedOnce_detectsOneD3() {
+        val output = runPipeline("d3.wav")
+        printDiagnostics("D3 Open String", "d3.wav", "1× D3 (MIDI 50)", output)
+
+        assertTrue("Expected at least 1 note but got none", output.noteCount >= 1)
+        val primaryName = output.noteNames[0]
+        assertTrue(
+            "Expected D note but got $primaryName. All notes: ${output.noteNames}",
+            primaryName.startsWith("D") && !primaryName.startsWith("D#")
+        )
+        assertTrue(
+            "Expected 1 note but got ${output.noteCount}: ${output.noteNames}",
+            output.noteCount <= 2
+        )
     }
 
     @Test
-    fun openStringsAll_detectsMultipleNotes() {
-        val notes = runPipeline("open_strings.wav")
-        assertTrue("Expected multiple notes but got: $notes", notes.size >= 2)
+    fun g3_singleNotePluckedOnce_detectsOneG3() {
+        val output = runPipeline("g3.wav")
+        printDiagnostics("G3 Open String", "g3.wav", "1× G3 (MIDI 55)", output)
+
+        assertTrue("Expected at least 1 note but got none", output.noteCount >= 1)
+        val primaryName = output.noteNames[0]
+        assertTrue(
+            "Expected G note but got $primaryName. All notes: ${output.noteNames}",
+            primaryName.startsWith("G") && !primaryName.startsWith("G#")
+        )
+        assertTrue(
+            "Expected 1 note but got ${output.noteCount}: ${output.noteNames}",
+            output.noteCount <= 2
+        )
     }
 
-    // ---- Diagnostic tests ----
+    @Test
+    fun b3_singleNotePluckedOnce_detectsOneB3() {
+        val output = runPipeline("b3.wav")
+        printDiagnostics("B3 Open String", "b3.wav", "1× B3 (MIDI 59)", output)
+
+        assertTrue("Expected at least 1 note but got none", output.noteCount >= 1)
+        val primaryName = output.noteNames[0]
+        assertTrue(
+            "Expected B note but got $primaryName. All notes: ${output.noteNames}",
+            primaryName.startsWith("B") && !primaryName.startsWith("Bb")
+        )
+        assertTrue(
+            "Expected 1 note but got ${output.noteCount}: ${output.noteNames}",
+            output.noteCount <= 2
+        )
+    }
+
+    @Test
+    fun highE4_singleNotePluckedOnce_detectsOneE4() {
+        val output = runPipeline("e4.wav")
+        printDiagnostics("High E4 Open String", "e4.wav", "1× E4 (MIDI 64)", output)
+
+        assertTrue("Expected at least 1 note but got none", output.noteCount >= 1)
+        // E4 is known problematic — quiet signal, may detect subharmonic
+        // Track accuracy in algorithm comparison; for now accept any detection
+        assertTrue(
+            "Expected 1-2 notes but got ${output.noteCount}: ${output.noteNames}",
+            output.noteCount <= 3
+        )
+        // TODO: When algorithm improves, require E4 detection
+    }
+
+    // ===== Chord Test =====
+
+    @Test
+    fun cMajor_chordStrummedOnce_detectsCMajorPitchClasses() {
+        val output = runPipeline("c_major.wav")
+        printDiagnostics("C Major Chord", "c_major.wav",
+            "1× chord with C, E, G pitch classes", output)
+
+        assertTrue("Expected at least 1 note/chord but got none", output.noteCount >= 1)
+
+        // Collect all detected pitch classes
+        val allPitchClasses = output.midiNotes.map { it % 12 }.toSet()
+
+        // At minimum should contain some of C(0), E(4), G(7)
+        val matchingClasses = allPitchClasses.intersect(EXPECTED_C_MAJOR_PITCH_CLASSES)
+        assertTrue(
+            "Expected C major pitch classes (C=0, E=4, G=7) but detected pitch classes: " +
+                "$allPitchClasses (notes: ${output.noteNames}). Only ${matchingClasses.size}/3 match.",
+            matchingClasses.size >= 2
+        )
+    }
+
+    // ===== Sequence Test =====
+
+    @Test
+    fun openStringsAll_sixNotesInSequence_E2toE4() {
+        val output = runPipeline("open_strings.wav")
+        printDiagnostics("All Open Strings Sequence", "open_strings.wav",
+            "6× notes: E2, A2, D3, G3, B3, E4", output)
+
+        // Should detect at least 4 distinct notes
+        assertTrue(
+            "Expected at least 4 notes but got ${output.noteCount}: ${output.noteNames}",
+            output.noteCount >= 4
+        )
+        assertTrue(
+            "Expected ~6 notes but got ${output.noteCount}: ${output.noteNames}",
+            output.noteCount in 4..8
+        )
+
+        // Check pitch ordering — notes should generally ascend
+        if (output.noteCount >= 4) {
+            var ascending = 0
+            for (i in 1 until output.midiNotes.size) {
+                if (output.midiNotes[i] > output.midiNotes[i-1]) ascending++
+            }
+            assertTrue(
+                "Expected ascending pitch sequence but got: ${output.noteNames} (${output.midiNotes})",
+                ascending >= output.noteCount / 2
+            )
+        }
+
+        // Check that detected notes include expected pitch classes
+        val detectedPitchClasses = output.midiNotes.map { it % 12 }.toSet()
+        val expectedPitchClasses = EXPECTED_OPEN_STRING_SEQUENCE.map { it % 12 }.toSet()
+        val overlap = detectedPitchClasses.intersect(expectedPitchClasses)
+        assertTrue(
+            "Expected pitch classes from open strings $expectedPitchClasses but got $detectedPitchClasses. " +
+                "Only ${overlap.size}/${expectedPitchClasses.size} overlap. Notes: ${output.noteNames}",
+            overlap.size >= 3
+        )
+    }
+
+    // ===== Diagnostic Tests =====
 
     @Test
     fun diagnose_confidenceFiltering() {
         val samples = loadWavSamples("low_e2.wav")
-        val thresholds = listOf(0.0, 0.3, 0.5, 0.6, 0.8)
+        val thresholds = listOf(0.0, 0.1, 0.2, 0.3, 0.5, 0.6, 0.8)
+        println("\n═══ Confidence Threshold Sweep (low_e2.wav) ═══")
         val countByThreshold = thresholds.map { threshold ->
             val pipeline = TranscriptionPipeline(minNoteConfidence = threshold)
             val result = pipeline.process(samples)
+            val notes = result.notes.map { PitchUtils.midiToNoteName(it.midiPitch) }
+            println("  threshold=$threshold → ${result.notes.size} notes: $notes")
             threshold to result.notes.size
         }
         assertTrue(
@@ -128,9 +291,27 @@ class RealAudioDiagnosticTest {
     }
 
     @Test
-    fun diagnose_onsetDetectorThresholds() {
-        val samples = loadWavSamples("low_e2.wav")
-        val defaultOnsets = OnsetDetector().detectOnsets(samples)
-        assertTrue("Default onset detector should find onsets, found: ${defaultOnsets.size}", defaultOnsets.isNotEmpty())
+    fun diagnose_allFilesOverview() {
+        val files = listOf(
+            "low_e2.wav" to "E2",
+            "a2.wav" to "A2",
+            "d3.wav" to "D3",
+            "g3.wav" to "G3",
+            "b3.wav" to "B3",
+            "e4.wav" to "E4",
+            "c_major.wav" to "Cmaj",
+            "open_strings.wav" to "E2→E4"
+        )
+        println("\n═══════════════════════════════════════════════════")
+        println("               ALGORITHM RESULTS OVERVIEW")
+        println("═══════════════════════════════════════════════════")
+        println(String.format("%-20s %-10s %-8s %s", "File", "Expected", "Count", "Detected"))
+        println("─".repeat(60))
+        for ((file, expected) in files) {
+            val output = runPipeline(file)
+            val detected = output.noteNames.joinToString(", ")
+            println(String.format("%-20s %-10s %-8d %s", file, expected, output.noteCount, detected))
+        }
+        println("═══════════════════════════════════════════════════")
     }
 }

@@ -16,6 +16,7 @@ import com.notenotes.ui.components.NoteNameView
 import com.notenotes.ui.components.SheetMusicWebView
 import com.notenotes.ui.components.TransportControls
 import com.notenotes.ui.components.WaveformView
+import com.notenotes.processing.PitchAlgorithm
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -217,20 +218,54 @@ fun PreviewScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
-            // Retranscribe button
+            // Algorithm selector + Retranscribe button
+            var selectedAlgorithm by remember { mutableStateOf(PitchAlgorithm.DEFAULT) }
+            var algorithmExpanded by remember { mutableStateOf(false) }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.Center
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 if (isRetranscribing) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     Spacer(modifier = Modifier.width(12.dp))
                     Text("Retranscribing...", style = MaterialTheme.typography.bodyMedium)
                 } else {
+                    // Algorithm dropdown
+                    Box {
+                        OutlinedButton(
+                            onClick = { algorithmExpanded = true }
+                        ) {
+                            Text(selectedAlgorithm.displayName, style = MaterialTheme.typography.bodySmall)
+                            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                        DropdownMenu(
+                            expanded = algorithmExpanded,
+                            onDismissRequest = { algorithmExpanded = false }
+                        ) {
+                            PitchAlgorithm.values().forEach { algo ->
+                                DropdownMenuItem(
+                                    text = { Text(algo.displayName) },
+                                    onClick = {
+                                        selectedAlgorithm = algo
+                                        algorithmExpanded = false
+                                    },
+                                    leadingIcon = if (algo == selectedAlgorithm) {
+                                        { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                                    } else null
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    // Retranscribe button
                     OutlinedButton(
-                        onClick = { viewModel.retranscribe() },
+                        onClick = { viewModel.retranscribe(pitchAlgorithm = selectedAlgorithm) },
                         enabled = idea?.audioFilePath != null
                     ) {
                         Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))

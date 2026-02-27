@@ -67,12 +67,12 @@
                     drawTimeSignatures: true,
                     drawKeySignatures: true,
                     drawMetronomeMarks: true,
-                    followCursor: true,
+                    followCursor: false,
                     cursorsOptions: [{
                         type: 0,
                         color: "#2196F3",
                         alpha: 0.5,
-                        follow: true
+                        follow: false
                     }]
                 });
                 isReady = true;
@@ -107,6 +107,9 @@
                     } catch(e) {
                         totalMeasures = 0;
                     }
+
+                    // Cache total cursor steps after render (so we never recount)
+                    cacheTotalSteps();
                     
                     // Notify Android that rendering is complete
                     if (window.Android) {
@@ -120,12 +123,32 @@
             }
         }
 
+        // Count total cursor steps once after render
+        function cacheTotalSteps() {
+            try {
+                if (!osmd || !osmd.cursor) { cachedTotalSteps = 0; return; }
+                osmd.cursor.reset();
+                cachedTotalSteps = 0;
+                while (!osmd.cursor.iterator.endReached) {
+                    cachedTotalSteps++;
+                    osmd.cursor.next();
+                }
+                osmd.cursor.reset();
+                currentStep = 0;
+                lastTargetStep = -1;
+            } catch (e) {
+                cachedTotalSteps = 0;
+            }
+        }
+
         // Show the playback cursor
         function showCursor() {
             try {
                 if (osmd && osmd.cursor) {
                     osmd.cursor.show();
                     osmd.cursor.reset();
+                    currentStep = 0;
+                    lastTargetStep = -1;
                     cursorEnabled = true;
                 }
             } catch (e) {
@@ -139,6 +162,7 @@
                 if (osmd && osmd.cursor) {
                     osmd.cursor.hide();
                     cursorEnabled = false;
+                    lastTargetStep = -1;
                 }
             } catch (e) {
                 // ignore
@@ -150,6 +174,8 @@
             try {
                 if (osmd && osmd.cursor) {
                     osmd.cursor.reset();
+                    currentStep = 0;
+                    lastTargetStep = -1;
                 }
             } catch (e) {
                 // ignore
@@ -161,6 +187,7 @@
             try {
                 if (osmd && osmd.cursor && !osmd.cursor.iterator.endReached) {
                     osmd.cursor.next();
+                    currentStep++;
                 }
             } catch (e) {
                 // ignore
@@ -170,39 +197,69 @@
         // Move cursor to a specific fraction (0.0 - 1.0) of the piece
         function setCursorToFraction(fraction) {
             try {
-                if (!osmd || !osmd.cursor) return;
+                if (!osmd || !osmd.cursor || cachedTotalSteps === 0) return;
                 
-                osmd.cursor.reset();
                 if (!cursorEnabled) {
                     osmd.cursor.show();
                     cursorEnabled = true;
                 }
-                
-                // Count total steps
-                var totalSteps = 0;
-                var tempIterator = osmd.cursor.iterator;
-                
-                // First, count total steps by iterating through
-                osmd.cursor.reset();
-                totalSteps = 0;
-                while (!osmd.cursor.iterator.endReached) {
-                    totalSteps++;
-                    osmd.cursor.next();
+
+                var targetStep = Math.floor(fraction * cachedTotalSteps);
+                targetStep = Math.max(0, Math.min(targetStep, cachedTotalSteps - 1));
+
+                // Skip if already at the target step (dedup rapid updates)
+                if (targetStep === lastTargetStep) return;
+                lastTargetStep = targetStep;
+
+                // Move cursor efficiently — go forward if possible, else reset
+                if (targetStep >= currentStep) {
+                    // Move forward from current position
+                    var stepsToGo = targetStep - currentStep;
+                    for (var i = 0; i < stepsToGo; i++) {
+                        if (osmd.cursor.iterator.endReached) break;
+                        osmd.cursor.next();
+                    }
+                } else {
+                    // Need to go backwards — must reset and advance
+                    osmd.cursor.reset();
+                    for (var i = 0; i < targetStep; i++) {
+                        if (osmd.cursor.iterator.endReached) break;
+                        osmd.cursor.next();
+                    }
                 }
-                
-                if (totalSteps === 0) return;
-                
-                // Now move to the target step
-                var targetStep = Math.floor(fraction * totalSteps);
-                targetStep = Math.max(0, Math.min(targetStep, totalSteps - 1));
-                
-                osmd.cursor.reset();
-                for (var i = 0; i < targetStep; i++) {
-                    if (osmd.cursor.iterator.endReached) break;
-                    osmd.cursor.next();
-                }
+                currentStep = targetStep;
+
+                // Manually scroll cursor into view (smooth, only if needed)
+                scrollCursorIntoView();
             } catch (e) {
                 // ignore cursor errors
+            }
+        }
+
+        // Smoothly scroll the cursor element into the visible area if it's off-screen
+        function scrollCursorIntoView() {
+            try {
+                var cursorEl = document.querySelector('.cursor-main, [class*="cursor"]');
+                if (!cursorEl) {
+                    // OSMD renders cursor as an img element inside the container
+                    var imgs = document.querySelectorAll('#osmd-container img');
+                    for (var i = 0; i < imgs.length; i++) {
+                        if (imgs[i].style.position === 'absolute' && imgs[i].style.zIndex) {
+                            cursorEl = imgs[i];
+                            break;
+                        }
+                    }
+                }
+                if (cursorEl) {
+                    var rect = cursorEl.getBoundingClientRect();
+                    var viewWidth = window.innerWidth;
+                    // Only scroll if cursor is outside the visible area (with margin)
+                    if (rect.left < 0 || rect.right > viewWidth) {
+                        cursorEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                    }
+                }
+            } catch (e) {
+                // ignore scroll errors
             }
         }
 

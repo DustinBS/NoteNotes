@@ -63,11 +63,16 @@ fun SheetMusicWebView(
         }
     }
 
-    // Update cursor position based on playback progress
+    // Update cursor position based on playback progress — throttled to ~10 Hz
+    var lastCursorUpdate by remember { mutableStateOf(0L) }
     LaunchedEffect(playbackProgress) {
         val wv = webView ?: return@LaunchedEffect
         if (isPlaying || cursorShown) {
-            wv.evaluateJavascript("setCursorToFraction($playbackProgress)", null)
+            val now = System.currentTimeMillis()
+            if (now - lastCursorUpdate >= 100) {  // max 10 updates per second
+                lastCursorUpdate = now
+                wv.evaluateJavascript("setCursorToFraction($playbackProgress)", null)
+            }
         }
     }
 

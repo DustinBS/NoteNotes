@@ -18,6 +18,7 @@ import com.notenotes.model.MusicalNote
 import com.notenotes.model.TranscriptionResult
 import com.notenotes.model.KeySignature
 import com.notenotes.model.TimeSignature
+import com.notenotes.processing.PitchAlgorithm
 import com.notenotes.processing.TranscriptionPipeline
 import com.notenotes.ui.components.WaveformData
 import com.notenotes.util.TranspositionUtils
@@ -201,7 +202,8 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         sensitivity: Double? = null,
         tempoBpm: Int? = null,
         keySignature: KeySignature? = null,
-        timeSignature: TimeSignature? = null
+        timeSignature: TimeSignature? = null,
+        pitchAlgorithm: PitchAlgorithm? = null
     ) {
         val melodyIdea = _idea.value ?: return
         val audioPath = melodyIdea.audioFilePath ?: run {
@@ -235,9 +237,13 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     ", key=${keySignature ?: "auto"}" +
                     ", time=${timeSignature ?: "auto"}")
 
-                // Create pipeline with custom sensitivity if provided
+                // Create pipeline with custom sensitivity and algorithm if provided
                 val minConfidence = sensitivity ?: 0.3
-                val pipeline = TranscriptionPipeline(minNoteConfidence = minConfidence)
+                val algorithm = pitchAlgorithm ?: PitchAlgorithm.DEFAULT
+                val pipeline = TranscriptionPipeline(
+                    minNoteConfidence = minConfidence,
+                    pitchAlgorithm = algorithm
+                )
                 var result = pipeline.process(
                     samples = samples,
                     userTempoBpm = tempoBpm,
