@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Sheet Music Preview</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background-color: #FFFFFF;
+            overflow-x: auto;
+            overflow-y: auto;
+            font-family: sans-serif;
+        }
+        #osmd-container {
+            width: 100%;
+            min-height: 200px;
+            padding: 16px;
+        }
+        #loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            color: #666;
+            font-size: 16px;
+        }
+        #error {
+            display: none;
+            color: #D32F2F;
+            padding: 16px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">Loading sheet music renderer...</div>
+    <div id="error"></div>
+    <div id="osmd-container"></div>
+
+    <!-- Load OSMD locally (BSD-3-Clause, free) -->
+    <script src="opensheetmusicdisplay.min.js"></script>
+    
+    <script>
+        var osmd = null;
+        var isReady = false;
+
+        // Initialize OSMD
+        function initOSMD() {
+            try {
+                var container = document.getElementById('osmd-container');
+                osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(container, {
+                    autoResize: true,
+                    drawTitle: false,
+                    drawSubtitle: false,
+                    drawComposer: false,
+                    drawLyricist: false,
+                    drawPartNames: false,
+                    drawPartAbbreviations: false,
+                    drawMeasureNumbers: true,
+                    drawTimeSignatures: true,
+                    drawKeySignatures: true,
+                    drawMetronomeMarks: true
+                });
+                isReady = true;
+                document.getElementById('loading').style.display = 'none';
+                
+                // Notify Android that OSMD is ready
+                if (window.Android) {
+                    window.Android.onOsmdReady();
+                }
+            } catch (e) {
+                showError('Failed to initialize: ' + e.message);
+            }
+        }
+
+        // Load and render MusicXML
+        function loadMusicXml(xmlString) {
+            if (!osmd || !isReady) {
+                showError('Sheet music renderer not ready');
+                return;
+            }
+
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('osmd-container').style.display = 'block';
+
+            try {
+                osmd.load(xmlString).then(function() {
+                    osmd.render();
+                    // Notify Android that rendering is complete
+                    if (window.Android) {
+                        window.Android.onRenderComplete();
+                    }
+                }).catch(function(e) {
+                    showError('Failed to load: ' + e.message);
+                });
+            } catch (e) {
+                showError('Error: ' + e.message);
+            }
+        }
+
+        // Show error message
+        function showError(message) {
+            var errorDiv = document.getElementById('error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            document.getElementById('loading').style.display = 'none';
+            
+            if (window.Android) {
+                window.Android.onError(message);
+            }
+        }
+
+        // Clear the display
+        function clearDisplay() {
+            if (osmd) {
+                document.getElementById('osmd-container').innerHTML = '';
+            }
+        }
+
+        // Initialize when page loads
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initOSMD);
+        } else {
+            initOSMD();
+        }
+    </script>
+</body>
+</html>
