@@ -32,6 +32,7 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import android.os.Environment
 
 private const val TAG = "NNPreview"
 
@@ -69,6 +70,38 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     private val _isRetranscribing = MutableStateFlow(false)
     val isRetranscribing: StateFlow<Boolean> = _isRetranscribing
 
+    // Editing state
+    private val _selectedNoteIndex = MutableStateFlow<Int?>(null)
+    val selectedNoteIndex: StateFlow<Int?> = _selectedNoteIndex
+
+    private val _editCursorFraction = MutableStateFlow<Float?>(null)
+    val editCursorFraction: StateFlow<Float?> = _editCursorFraction
+
+    private val _isEditorOpen = MutableStateFlow(false)
+    val isEditorOpen: StateFlow<Boolean> = _isEditorOpen
+
+    // Derived: the actual selected note object (for display)
+    val selectedNote: MusicalNote?
+        get() {
+            val idx = _selectedNoteIndex.value ?: return null
+            val notes = _notesList.value
+            return if (idx in notes.indices) notes[idx] else null
+        }
+
+    // Waveform window state
+    private val _windowStartFraction = MutableStateFlow(0f)
+    val windowStartFraction: StateFlow<Float> = _windowStartFraction
+
+    private val _windowSizeSec = MutableStateFlow(5f)
+    val windowSizeSec: StateFlow<Float> = _windowSizeSec
+
+    private val _isWindowLocked = MutableStateFlow(false)
+    val isWindowLocked: StateFlow<Boolean> = _isWindowLocked
+
+    // Rename dialog state
+    private val _isRenameDialogOpen = MutableStateFlow(false)
+    val isRenameDialogOpen: StateFlow<Boolean> = _isRenameDialogOpen
+
     private var currentResult: TranscriptionResult? = null
 
     fun loadIdea(ideaId: Long) {
@@ -92,7 +125,9 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     if (melodyIdea.notes != null) {
                         try {
                             val notesType = object : TypeToken<List<MusicalNote>>() {}.type
-                            val notes: List<MusicalNote> = gson.fromJson(melodyIdea.notes, notesType)
+                            val notes: List<MusicalNote> = MusicalNote.sanitizeList(
+                                gson.fromJson(melodyIdea.notes, notesType)
+                            )
                             _notesList.value = notes
                         } catch (e: Exception) {
                             Log.w(TAG, "loadIdea: Could not parse notes JSON for note name view", e)
@@ -102,7 +137,9 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     Log.d(TAG, "loadIdea: Regenerating MusicXML from stored notes...")
                     // Rebuild from stored notes
                     val notesType = object : TypeToken<List<MusicalNote>>() {}.type
-                    val notes: List<MusicalNote> = gson.fromJson(melodyIdea.notes, notesType)
+                    val notes: List<MusicalNote> = MusicalNote.sanitizeList(
+                        gson.fromJson(melodyIdea.notes, notesType)
+                    )
                     Log.d(TAG, "loadIdea: Parsed ${notes.size} notes from JSON")
                     
                     val keySig = parseKeySignature(melodyIdea.keySignature)
@@ -143,7 +180,13 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val file = File(audioPath)
         if (file.exists()) {
             Log.i(TAG, "playVoiceMemo: Playing ${file.absolutePath} (${file.length()} bytes)")
+            // Remember pre-scrubbed position so we can seek after play
+            val preScrubPosition = audioPlayer.progress.value
             audioPlayer.play(file)
+            // If user scrubbed before first play, seek to that position
+            if (preScrubPosition > 0.01f) {
+                audioPlayer.seekTo(preScrubPosition)
+            }
         } else {
             Log.e(TAG, "playVoiceMemo: Audio file not found: $audioPath")
             _errorMessage.value = "Audio file not found"
@@ -191,7 +234,485 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun seekTo(fraction: Float) {
+        // Pause playback while scrubbing to avoid stuttering
+        if (audioPlayer.state.value == AudioPlayer.PlaybackState.PLAYING) {
+            audioPlayer.pause()
+        }
         audioPlayer.seekTo(fraction)
+        // Make the seeked position the START of the window
+        moveWindowToFraction(fraction)
+    }
+
+    /**
+     * Seek audio only without moving the waveform window.
+     * Used when scrubbing directly on the waveform (window is already showing the right area).
+     */
+    fun seekAudioOnly(fraction: Float) {
+        if (audioPlayer.state.value == AudioPlayer.PlaybackState.PLAYING) {
+            audioPlayer.pause()
+        }
+        audioPlayer.seekTo(fraction)
+    }
+
+    /**
+     * Move the window so that the given fraction becomes the window start.
+     */
+    fun moveWindowToFraction(fraction: Float) {
+        val durationMs = _audioDurationMs.value
+        if (durationMs <= 0) return
+        val windowFractionSize = (_windowSizeSec.value * 1000f) / durationMs
+        val newStart = fraction.coerceIn(0f, (1f - windowFractionSize).coerceAtLeast(0f))
+        _windowStartFraction.value = newStart
+    }
+
+    // ── Note Editing ──────────────────────────────────────────
+
+    fun selectNote(index: Int?) {
+        _selectedNoteIndex.value = index
+        // If selecting a note, open editor and clear edit cursor
+        if (index != null) {
+            _isEditorOpen.value = true
+            _editCursorFraction.value = null
+        }
+    }
+
+    fun setEditCursor(fraction: Float?) {
+        _editCursorFraction.value = fraction
+        // If setting cursor, open editor and clear note selection
+        if (fraction != null) {
+            _isEditorOpen.value = true
+            _selectedNoteIndex.value = null
+        }
+    }
+
+    fun closeEditor() {
+        _isEditorOpen.value = false
+        _selectedNoteIndex.value = null
+        _editCursorFraction.value = null
+    }
+
+    /**
+     * Add a note (or chord) at the edit cursor position.
+     * Duration is auto-computed: fills remaining time until the next note.
+     * Stores guitar tablature (string/fret) as ground truth.
+     */
+    fun addNote(editorNotes: List<Pair<Int, Pair<Int, Int>>>) { // List of (midiPitch, (stringIndex, fret))
+        val cursorFrac = _editCursorFraction.value ?: return
+        val currentNotes = _notesList.value.toMutableList()
+        val melodyIdea = _idea.value ?: return
+        val tempoBpm = melodyIdea.tempoBpm
+        val durationMs = _audioDurationMs.value
+        if (durationMs <= 0) return
+
+        val cursorTimeMs = cursorFrac * durationMs
+
+        // Create the new note with auto-duration placeholder (will be recalculated)
+        val primaryEntry = editorNotes.minByOrNull { it.first }!!
+        val primaryMidi = primaryEntry.first
+        val primaryString = primaryEntry.second.first
+        val primaryFret = primaryEntry.second.second
+        // Create chord entries sorted by MIDI pitch (so chordPitches and chordStringFrets stay in sync)
+        val chordEntries = if (editorNotes.size > 1) {
+            editorNotes.filter { it.first != primaryMidi }.sortedBy { it.first }
+        } else emptyList()
+        val chordPitches = chordEntries.map { it.first }
+        val chordStringFrets = chordEntries.map { Pair(it.second.first, it.second.second) }
+
+        val newNote = MusicalNote(
+            midiPitch = primaryMidi,
+            durationTicks = 4, // placeholder quarter note, will be recalculated
+            type = "quarter",
+            chordPitches = chordPitches,
+            chordStringFrets = chordStringFrets,
+            chordName = if (chordPitches.isNotEmpty()) "Manual Chord" else null,
+            velocity = 80,
+            guitarString = primaryString,
+            guitarFret = primaryFret,
+            isManual = true,
+            timePositionMs = cursorTimeMs
+        )
+
+        // Insert at position sorted by timePositionMs for manual, or cumulative for auto
+        currentNotes.add(newNote)
+        
+        // Recalculate all durations based on time positions
+        val sortedNotes = recalculateNoteDurations(currentNotes, tempoBpm, durationMs)
+        updateNotesAndRefresh(sortedNotes)
+
+        Log.i(TAG, "addNote: Added ${com.notenotes.util.PitchUtils.midiToNoteName(primaryMidi)} " +
+            "(MIDI $primaryMidi, string=$primaryString, fret=$primaryFret) at ${String.format("%.0f", cursorTimeMs)}ms")
+
+        // Keep editor open but clear cursor for next add
+        _editCursorFraction.value = null
+    }
+
+    /**
+     * Recalculate note durations so each note fills to the next note's time position.
+     * Manual notes use their timePositionMs; auto notes use cumulative ticks.
+     */
+    private fun recalculateNoteDurations(notes: List<MusicalNote>, tempoBpm: Int, durationMs: Int): List<MusicalNote> {
+        if (notes.isEmpty()) return notes
+
+        val beatDurationMs = 60000f / tempoBpm
+        val tickDurationMs = beatDurationMs / 4f // divisions=4
+
+        // Compute time positions for all notes
+        data class TimedNote(val note: MusicalNote, val timeMs: Float)
+        
+        val timedNotes = mutableListOf<TimedNote>()
+        var cumulativeMs = 0f
+        
+        for (note in notes) {
+            val timeMs = if (note.isManual && note.timePositionMs != null) {
+                note.timePositionMs
+            } else {
+                cumulativeMs
+            }
+            timedNotes.add(TimedNote(note, timeMs))
+            cumulativeMs = timeMs + note.durationTicks * tickDurationMs
+        }
+
+        // Sort by time position
+        timedNotes.sortBy { it.timeMs }
+
+        // Recalculate durations: each note fills to the next
+        val result = mutableListOf<MusicalNote>()
+        for (i in timedNotes.indices) {
+            val current = timedNotes[i]
+            val nextTimeMs = if (i + 1 < timedNotes.size) timedNotes[i + 1].timeMs else durationMs.toFloat()
+            val gapMs = (nextTimeMs - current.timeMs).coerceAtLeast(tickDurationMs) // minimum 1 tick
+            val newTicks = (gapMs / tickDurationMs).toInt().coerceAtLeast(1)
+            val newType = ticksToType(newTicks)
+            result.add(current.note.copy(
+                durationTicks = newTicks,
+                type = newType,
+                timePositionMs = current.timeMs
+            ))
+        }
+
+        return result
+    }
+
+    /**
+     * Map tick count to closest note type name.
+     */
+    private fun ticksToType(ticks: Int): String = when {
+        ticks >= 16 -> "whole"
+        ticks >= 8  -> "half"
+        ticks >= 4  -> "quarter"
+        ticks >= 2  -> "eighth"
+        else        -> "16th"
+    }
+
+    /**
+     * Update a note at a specific index with new guitar tab data.
+     */
+    fun updateNoteAt(index: Int, guitarString: Int, guitarFret: Int) {
+        val currentNotes = _notesList.value.toMutableList()
+        if (index !in currentNotes.indices) return
+        val oldNote = currentNotes[index]
+        val newMidi = com.notenotes.util.GuitarUtils.toMidi(guitarString, guitarFret)
+        currentNotes[index] = oldNote.copy(
+            midiPitch = newMidi,
+            guitarString = guitarString,
+            guitarFret = guitarFret
+        )
+        updateNotesAndRefresh(currentNotes)
+        Log.i(TAG, "updateNoteAt: Updated note $index to MIDI $newMidi (string=$guitarString, fret=$guitarFret)")
+    }
+
+    /**
+     * Update the chord pitches and their string/fret positions for a note at a specific index.
+     */
+    fun updateChordPitches(index: Int, newChordPitches: List<Int>, newChordStringFrets: List<Pair<Int, Int>>) {
+        val currentNotes = _notesList.value.toMutableList()
+        if (index !in currentNotes.indices) return
+        val oldNote = currentNotes[index]
+        // Filter out the primary pitch and keep positions in sync
+        val paired = newChordPitches.zip(newChordStringFrets)
+        val filtered = paired.filter { it.first != oldNote.midiPitch }.sortedBy { it.first }
+        currentNotes[index] = oldNote.copy(
+            chordPitches = filtered.map { it.first },
+            chordStringFrets = filtered.map { it.second },
+            chordName = if (filtered.isEmpty()) null else oldNote.chordName
+        )
+        updateNotesAndRefresh(currentNotes)
+        Log.i(TAG, "updateChordPitches: Updated chord at $index, pitches=${filtered.map { it.first }}")
+    }
+
+    /**
+     * Split the note under the edit cursor into two notes at the cursor position.
+     */
+    fun splitNoteAtCursor() {
+        val cursorFrac = _editCursorFraction.value ?: return
+        val durationMs = _audioDurationMs.value
+        if (durationMs <= 0) return
+        val cursorTimeMs = cursorFrac * durationMs
+        val currentNotes = _notesList.value.toMutableList()
+        val tempoBpm = _idea.value?.tempoBpm ?: 120
+
+        // Find the note that contains the cursor
+        val beatDurationMs = 60000f / tempoBpm
+        val tickDurationMs = beatDurationMs / 4f
+        var cumulativeMs = 0f
+
+        for (i in currentNotes.indices) {
+            val note = currentNotes[i]
+            val noteStartMs = if (note.isManual && note.timePositionMs != null) {
+                note.timePositionMs
+            } else {
+                cumulativeMs
+            }
+            val noteDurationMs = note.durationTicks * tickDurationMs
+            val noteEndMs = noteStartMs + noteDurationMs
+
+            if (cursorTimeMs > noteStartMs + tickDurationMs && cursorTimeMs < noteEndMs - tickDurationMs) {
+                // Split this note into two
+                val firstDurationMs = cursorTimeMs - noteStartMs
+                val secondDurationMs = noteEndMs - cursorTimeMs
+                val firstTicks = (firstDurationMs / tickDurationMs).toInt().coerceAtLeast(1)
+                val secondTicks = (secondDurationMs / tickDurationMs).toInt().coerceAtLeast(1)
+
+                val firstNote = note.copy(
+                    durationTicks = firstTicks,
+                    type = ticksToType(firstTicks),
+                    timePositionMs = noteStartMs
+                )
+                val secondNote = note.copy(
+                    durationTicks = secondTicks,
+                    type = ticksToType(secondTicks),
+                    timePositionMs = cursorTimeMs,
+                    isManual = true
+                )
+
+                currentNotes.removeAt(i)
+                currentNotes.add(i, secondNote)
+                currentNotes.add(i, firstNote)
+
+                val sorted = recalculateNoteDurations(currentNotes, tempoBpm, durationMs)
+                updateNotesAndRefresh(sorted)
+                Log.i(TAG, "splitNoteAtCursor: Split note at index $i at ${cursorTimeMs}ms")
+                return
+            }
+
+            cumulativeMs = noteStartMs + noteDurationMs
+        }
+        Log.w(TAG, "splitNoteAtCursor: No splittable note found at cursor position")
+    }
+
+    /**
+     * Check if the edit cursor is currently inside a note (for showing split button).
+     */
+    fun isCursorInsideNote(): Boolean {
+        val cursorFrac = _editCursorFraction.value ?: return false
+        val durationMs = _audioDurationMs.value
+        if (durationMs <= 0) return false
+        val cursorTimeMs = cursorFrac * durationMs
+        val tempoBpm = _idea.value?.tempoBpm ?: 120
+        val beatDurationMs = 60000f / tempoBpm
+        val tickDurationMs = beatDurationMs / 4f
+        var cumulativeMs = 0f
+
+        for (note in _notesList.value) {
+            val noteStartMs = if (note.isManual && note.timePositionMs != null) {
+                note.timePositionMs
+            } else {
+                cumulativeMs
+            }
+            val noteDurationMs = note.durationTicks * tickDurationMs
+            val noteEndMs = noteStartMs + noteDurationMs
+
+            if (cursorTimeMs >= noteStartMs && cursorTimeMs <= noteEndMs) {
+                return true
+            }
+            cumulativeMs = noteStartMs + noteDurationMs
+        }
+        return false
+    }
+
+    /**
+     * Delete the currently selected note.
+     */
+    fun deleteSelectedNote() {
+        val idx = _selectedNoteIndex.value ?: return
+        val currentNotes = _notesList.value.toMutableList()
+        if (idx !in currentNotes.indices) return
+
+        val removed = currentNotes.removeAt(idx)
+        Log.i(TAG, "deleteNote: Removed ${com.notenotes.util.PitchUtils.midiToNoteName(removed.midiPitch)} " +
+            "(MIDI ${removed.midiPitch}) at index $idx")
+
+        updateNotesAndRefresh(currentNotes)
+        _selectedNoteIndex.value = null
+    }
+
+    /**
+     * Clear all notes with confirmation (called after user confirms dialog).
+     */
+    fun clearAllNotes() {
+        Log.i(TAG, "clearAllNotes: Clearing ${_notesList.value.size} notes")
+        _selectedNoteIndex.value = null
+        _editCursorFraction.value = null
+        updateNotesAndRefresh(emptyList())
+    }
+
+    /**
+     * Rename the idea title.
+     */
+    fun renameIdea(newTitle: String) {
+        val trimmed = newTitle.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val melodyIdea = _idea.value ?: return@launch
+            val updated = melodyIdea.copy(title = trimmed)
+            dao.update(updated)
+            _idea.value = updated
+            Log.i(TAG, "renameIdea: Renamed to '$trimmed'")
+        }
+    }
+
+    fun openRenameDialog() { _isRenameDialogOpen.value = true }
+    fun closeRenameDialog() { _isRenameDialogOpen.value = false }
+
+    /**
+     * Update the key signature and regenerate MusicXML.
+     */
+    fun updateKeySignature(key: KeySignature) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val melodyIdea = _idea.value ?: return@launch
+            val updated = melodyIdea.copy(keySignature = key.toString())
+            dao.update(updated)
+            _idea.value = updated
+            // Regenerate MusicXML with new key
+            updateNotesAndRefresh(_notesList.value)
+            Log.i(TAG, "updateKeySignature: Changed to $key")
+        }
+    }
+
+    /**
+     * Update the time signature and regenerate MusicXML.
+     */
+    fun updateTimeSignature(ts: TimeSignature) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val melodyIdea = _idea.value ?: return@launch
+            val updated = melodyIdea.copy(timeSignature = ts.toString())
+            dao.update(updated)
+            _idea.value = updated
+            // Regenerate MusicXML with new time signature
+            updateNotesAndRefresh(_notesList.value)
+            Log.i(TAG, "updateTimeSignature: Changed to $ts")
+        }
+    }
+
+    /**
+     * Update the tempo BPM and regenerate MusicXML.
+     */
+    fun updateTempoBpm(bpm: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val melodyIdea = _idea.value ?: return@launch
+            val updated = melodyIdea.copy(tempoBpm = bpm)
+            dao.update(updated)
+            _idea.value = updated
+            // Regenerate MusicXML with new tempo
+            updateNotesAndRefresh(_notesList.value)
+            Log.i(TAG, "updateTempoBpm: Changed to $bpm")
+        }
+    }
+
+    // Window navigation
+    fun setWindowStartFraction(fraction: Float) {
+        _windowStartFraction.value = fraction.coerceIn(0f, 1f)
+    }
+
+    fun toggleWindowLock() {
+        _isWindowLocked.value = !_isWindowLocked.value
+    }
+
+    fun setWindowSizeSec(sec: Float) {
+        _windowSizeSec.value = sec.coerceIn(1f, 30f)
+    }
+
+    /**
+     * Move window by delta windows (positive = forward, negative = backward).
+     */
+    fun moveWindow(deltaWindows: Float) {
+        val durationMs = _audioDurationMs.value
+        if (durationMs <= 0) return
+        val windowFractionSize = (_windowSizeSec.value * 1000f) / durationMs
+        val newStart = (_windowStartFraction.value + deltaWindows * windowFractionSize).coerceIn(0f, (1f - windowFractionSize).coerceAtLeast(0f))
+        _windowStartFraction.value = newStart
+    }
+
+    /**
+     * Auto-scroll window to follow playback (unless locked).
+     */
+    fun updateWindowForPlayback(playbackFraction: Float) {
+        if (_isWindowLocked.value) return
+        val durationMs = _audioDurationMs.value
+        if (durationMs <= 0) return
+        val windowFractionSize = (_windowSizeSec.value * 1000f) / durationMs
+        val windowEnd = _windowStartFraction.value + windowFractionSize
+        if (playbackFraction < _windowStartFraction.value || playbackFraction > windowEnd) {
+            _windowStartFraction.value = (playbackFraction - windowFractionSize * 0.1f).coerceIn(0f, (1f - windowFractionSize).coerceAtLeast(0f))
+        }
+    }
+
+    /**
+     * After adding or deleting notes, refresh all derived state (MusicXML, exports, DB).
+     */
+    private fun updateNotesAndRefresh(notes: List<MusicalNote>) {
+        _notesList.value = notes
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val melodyIdea = _idea.value ?: return@launch
+                val keySig = parseKeySignature(melodyIdea.keySignature)
+                val timeSig = parseTimeSignature(melodyIdea.timeSignature)
+                val instrument = InstrumentProfile.ALL.find { it.name == melodyIdea.instrument }
+
+                val result = TranscriptionResult(
+                    notes = notes,
+                    keySignature = keySig,
+                    timeSignature = timeSig,
+                    tempoBpm = melodyIdea.tempoBpm,
+                    instrument = instrument
+                )
+                currentResult = result
+
+                // Regenerate MusicXML
+                val xmlContent = musicXmlGenerator.generateMusicXml(result)
+                _musicXml.value = xmlContent
+
+                // Regenerate export files
+                val title = melodyIdea.title
+                val externalMusicDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                    "NoteNotes"
+                )
+                val exportsDir = File(externalMusicDir, "exports")
+                exportsDir.mkdirs()
+
+                val midiFile = File(exportsDir, "$title.mid")
+                midiWriter.writeToFile(result, midiFile)
+
+                val xmlFile = File(exportsDir, "$title.musicxml")
+                musicXmlGenerator.writeToFile(result, xmlFile)
+
+                // Update database
+                val updatedIdea = melodyIdea.copy(
+                    notes = gson.toJson(notes),
+                    midiFilePath = midiFile.absolutePath,
+                    musicXmlFilePath = xmlFile.absolutePath
+                )
+                dao.update(updatedIdea)
+                _idea.value = updatedIdea
+
+                Log.i(TAG, "updateNotesAndRefresh: Saved ${notes.size} notes")
+            } catch (e: Exception) {
+                Log.e(TAG, "updateNotesAndRefresh: Error", e)
+                _errorMessage.value = "Error saving: ${e.message}"
+            }
+        }
     }
 
     /**
@@ -269,7 +790,11 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
 
                 // Regenerate export files
                 val title = melodyIdea.title
-                val exportsDir = File(context.filesDir, "exports")
+                val externalMusicDir2 = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                    "NoteNotes"
+                )
+                val exportsDir = File(externalMusicDir2, "exports")
                 exportsDir.mkdirs()
 
                 val midiFile = File(exportsDir, "$title.mid")
@@ -348,7 +873,9 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val notesJson = melodyIdea.notes ?: return null
         
         val notesType = object : TypeToken<List<MusicalNote>>() {}.type
-        val notes: List<MusicalNote> = gson.fromJson(notesJson, notesType)
+        val notes: List<MusicalNote> = MusicalNote.sanitizeList(
+            gson.fromJson(notesJson, notesType)
+        )
         
         val result = TranscriptionResult(
             notes = notes,

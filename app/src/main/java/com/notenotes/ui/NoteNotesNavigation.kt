@@ -66,6 +66,10 @@ fun NoteNotesNavHost(
                 onNavigateBack = {
                     Log.d(TAG, "Navigating back from PREVIEW")
                     navController.popBackStack()
+                },
+                onNavigateToSettings = {
+                    Log.d(TAG, "Navigating to SETTINGS from PREVIEW")
+                    navController.navigate(Routes.SETTINGS)
                 }
             )
         }

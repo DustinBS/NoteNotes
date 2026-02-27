@@ -1,6 +1,7 @@
 package com.notenotes.ui.components
 
 import android.annotation.SuppressLint
+import android.util.Log
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
@@ -116,13 +117,18 @@ fun SheetMusicWebView(
                     }
 
                     @JavascriptInterface
+                    fun onScoreLoaded(trackCount: Int) {
+                        Log.d("SheetMusic", "Score loaded with $trackCount track(s)")
+                    }
+
+                    @JavascriptInterface
                     fun onError(message: String) {
                         post { onError(message) }
                     }
                 }, "Android")
 
                 webViewClient = WebViewClient()
-                loadUrl("file:///android_asset/osmd/preview.html")
+                loadUrl("file:///android_asset/alphatab/preview.html")
                 webView = this
             }
         },

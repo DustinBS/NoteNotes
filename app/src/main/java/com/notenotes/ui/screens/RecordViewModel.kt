@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import android.os.Environment
 
 private const val TAG = "NNRecord"
 
@@ -147,20 +148,27 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
 
                 _transcriptionResult.value = result
 
-                // Save files
+                // Save files — use external Music directory for persistence across uninstalls
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
                 val title = "Idea_$timestamp"
                 Log.d(TAG, "processRecording: Saving as '$title'...")
 
-                // Save WAV
-                val audioDir = File(context.filesDir, "audio")
+                // External base directory: Music/NoteNotes/
+                val externalMusicDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                    "NoteNotes"
+                )
+                externalMusicDir.mkdirs()
+
+                // Save WAV to external storage
+                val audioDir = File(externalMusicDir, "audio")
                 audioDir.mkdirs()
                 val wavFile = File(audioDir, "$title.wav")
                 WavWriter.writeWav(samples, wavFile)
                 Log.d(TAG, "processRecording: WAV saved: ${wavFile.absolutePath} (${wavFile.length()} bytes)")
 
-                // Save MIDI
-                val exportsDir = File(context.filesDir, "exports")
+                // Save MIDI & MusicXML to external storage
+                val exportsDir = File(externalMusicDir, "exports")
                 exportsDir.mkdirs()
                 val midiFile = File(exportsDir, "$title.mid")
                 midiWriter.writeToFile(result, midiFile)

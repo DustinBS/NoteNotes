@@ -98,12 +98,14 @@ class AudioPlayer {
 
     /**
      * Seek to a position (0.0 to 1.0).
+     * Updates progress even if media player hasn't been initialized yet,
+     * so the UI reflects the scrubbed position.
      */
     fun seekTo(fraction: Float) {
+        _progress.value = fraction
         mediaPlayer?.let {
             val position = (fraction * it.duration).toInt()
             it.seekTo(position)
-            _progress.value = fraction
         }
     }
 

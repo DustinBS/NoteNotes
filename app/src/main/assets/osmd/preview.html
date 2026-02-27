@@ -18,8 +18,12 @@
         }
         #osmd-container {
             width: 100%;
-            min-height: 200px;
-            padding: 16px;
+            min-height: 300px;
+            padding: 12px;
+        }
+        /* High contrast for tablature numbers */
+        #osmd-container text[font-weight="bold"] {
+            fill: #000 !important;
         }
         #loading {
             display: flex;
@@ -67,6 +71,8 @@
                     drawTimeSignatures: true,
                     drawKeySignatures: true,
                     drawMetronomeMarks: true,
+                    drawFingerings: true,
+                    fingeringPosition: "aboveorbelow",
                     followCursor: false,
                     cursorsOptions: [{
                         type: 0,

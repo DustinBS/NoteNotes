@@ -57,15 +57,49 @@ class TranscriptionPipeline(
     private fun detectPitchesWithAlgorithm(samples: ShortArray): List<PitchDetectionResult> {
         Log.d(TAG, "detectPitchesWithAlgorithm: using ${pitchAlgorithm.displayName}")
         return when (pitchAlgorithm) {
-            PitchAlgorithm.YIN -> (pitchDetector as YinPitchDetector).detectPitches(samples)
-            PitchAlgorithm.MPM -> (pitchDetector as McLeodPitchDetector).detectPitches(samples)
-            PitchAlgorithm.HPS -> (pitchDetector as HpsPitchDetector).detectPitches(samples)
+            PitchAlgorithm.YIN -> {
+                val startMs = System.currentTimeMillis()
+                val results = (pitchDetector as YinPitchDetector).detectPitches(samples)
+                Log.i(TAG, "YIN: ${results.size} frames, ${results.count { it.isPitched }} pitched in ${System.currentTimeMillis() - startMs}ms")
+                results
+            }
+            PitchAlgorithm.MPM -> {
+                val startMs = System.currentTimeMillis()
+                val results = (pitchDetector as McLeodPitchDetector).detectPitches(samples)
+                Log.i(TAG, "MPM: ${results.size} frames, ${results.count { it.isPitched }} pitched in ${System.currentTimeMillis() - startMs}ms")
+                results
+            }
+            PitchAlgorithm.HPS -> {
+                val startMs = System.currentTimeMillis()
+                try {
+                    val results = (pitchDetector as HpsPitchDetector).detectPitches(samples)
+                    Log.i(TAG, "HPS: ${results.size} frames, ${results.count { it.isPitched }} pitched in ${System.currentTimeMillis() - startMs}ms")
+                    if (results.isEmpty()) {
+                        Log.w(TAG, "HPS returned empty results! samples.size=${samples.size}, falling back to YIN")
+                        YinPitchDetector(sampleRate = sampleRate).detectPitches(samples)
+                    } else results
+                } catch (e: Exception) {
+                    Log.e(TAG, "HPS crashed! Falling back to YIN", e)
+                    YinPitchDetector(sampleRate = sampleRate).detectPitches(samples)
+                }
+            }
             PitchAlgorithm.CONSENSUS -> {
                 @Suppress("UNCHECKED_CAST")
                 val detectors = pitchDetector as List<Any>
+                val t0 = System.currentTimeMillis()
                 val yinResults = (detectors[0] as YinPitchDetector).detectPitches(samples)
+                val t1 = System.currentTimeMillis()
                 val mpmResults = (detectors[1] as McLeodPitchDetector).detectPitches(samples)
-                val hpsResults = (detectors[2] as HpsPitchDetector).detectPitches(samples)
+                val t2 = System.currentTimeMillis()
+                val hpsResults = try {
+                    (detectors[2] as HpsPitchDetector).detectPitches(samples)
+                } catch (e: Exception) {
+                    Log.e(TAG, "HPS crashed in consensus mode, using empty", e)
+                    emptyList()
+                }
+                val t3 = System.currentTimeMillis()
+                Log.i(TAG, "Consensus timing: YIN=${t1-t0}ms, MPM=${t2-t1}ms, HPS=${t3-t2}ms")
+                Log.i(TAG, "Consensus frames: YIN=${yinResults.size}, MPM=${mpmResults.size}, HPS=${hpsResults.size}")
                 consensusVote(yinResults, mpmResults, hpsResults)
             }
         }
