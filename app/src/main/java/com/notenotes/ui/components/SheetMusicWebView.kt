@@ -19,6 +19,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 fun SheetMusicWebView(
     musicXml: String?,
     modifier: Modifier = Modifier,
+    playbackProgress: Float = 0f,
+    isPlaying: Boolean = false,
     onReady: () -> Unit = {},
     onRenderComplete: () -> Unit = {},
     onError: (String) -> Unit = {}
@@ -26,6 +28,7 @@ fun SheetMusicWebView(
     var webView by remember { mutableStateOf<WebView?>(null) }
     var isOsmdReady by remember { mutableStateOf(false) }
     var pendingXml by remember { mutableStateOf<String?>(null) }
+    var cursorShown by remember { mutableStateOf(false) }
 
     // Clean up WebView when leaving composition (M7)
     DisposableEffect(Unit) {
@@ -45,6 +48,26 @@ fun SheetMusicWebView(
             loadMusicXml(webView!!, musicXml)
         } else if (musicXml != null && !isOsmdReady) {
             pendingXml = musicXml
+        }
+    }
+
+    // Show/hide cursor and update position during playback
+    LaunchedEffect(isPlaying) {
+        val wv = webView ?: return@LaunchedEffect
+        if (isPlaying) {
+            wv.evaluateJavascript("showCursor()", null)
+            cursorShown = true
+        } else if (cursorShown && !isPlaying) {
+            wv.evaluateJavascript("hideCursor()", null)
+            cursorShown = false
+        }
+    }
+
+    // Update cursor position based on playback progress
+    LaunchedEffect(playbackProgress) {
+        val wv = webView ?: return@LaunchedEffect
+        if (isPlaying || cursorShown) {
+            wv.evaluateJavascript("setCursorToFraction($playbackProgress)", null)
         }
     }
 

@@ -101,6 +101,13 @@ class MusicXmlGenerator {
                 if (note.durationTicks <= remainingTicks) {
                     // Note fits in current measure
                     appendNote(sb, note, divisions, result.keySignature.fifths, tieStop = pendingTieStop)
+                    // Append chord notes (same duration, with <chord/> tag)
+                    if (note.isChord) {
+                        for (chordPitch in note.chordPitches) {
+                            val chordNote = note.copy(midiPitch = chordPitch, chordPitches = emptyList(), chordName = null)
+                            appendNote(sb, chordNote, divisions, result.keySignature.fifths, isChordNote = true)
+                        }
+                    }
                     pendingTieStop = false
                     ticksInCurrentMeasure += note.durationTicks
                     noteIndex++
@@ -117,6 +124,13 @@ class MusicXmlGenerator {
                             tiedToNext = true
                         )
                         appendNote(sb, firstPart, divisions, result.keySignature.fifths, tieStart = true, tieStop = pendingTieStop)
+                        // Chord notes for the first part of the tie  
+                        if (note.isChord) {
+                            for (chordPitch in note.chordPitches) {
+                                val chordNote = firstPart.copy(midiPitch = chordPitch, chordPitches = emptyList(), chordName = null)
+                                appendNote(sb, chordNote, divisions, result.keySignature.fifths, tieStart = true, isChordNote = true)
+                            }
+                        }
                         pendingTieStop = false
                         
                         // Replace current note with remainder for next measure (tie stop)
@@ -184,8 +198,14 @@ class MusicXmlGenerator {
         sb.appendLine("""          <beat-type>${result.timeSignature.beatType}</beat-type>""")
         sb.appendLine("""        </time>""")
         sb.appendLine("""        <clef>""")
-        sb.appendLine("""          <sign>G</sign>""")
-        sb.appendLine("""          <line>2</line>""")
+        val clefSign = result.instrument?.clefSign ?: "G"
+        val clefLine = result.instrument?.clefLine ?: 2
+        val clefOctaveChange = result.instrument?.clefOctaveChange ?: 0
+        sb.appendLine("""          <sign>$clefSign</sign>""")
+        sb.appendLine("""          <line>$clefLine</line>""")
+        if (clefOctaveChange != 0) {
+            sb.appendLine("""          <clef-octave-change>$clefOctaveChange</clef-octave-change>""")
+        }
         sb.appendLine("""        </clef>""")
         sb.appendLine("""      </attributes>""")
     }
@@ -213,9 +233,15 @@ class MusicXmlGenerator {
         divisions: Int,
         keyFifths: Int,
         tieStart: Boolean = false,
-        tieStop: Boolean = false
+        tieStop: Boolean = false,
+        isChordNote: Boolean = false
     ) {
         sb.appendLine("""      <note>""")
+        
+        // Chord indicator (must come before <pitch>)
+        if (isChordNote) {
+            sb.appendLine("""        <chord/>""")
+        }
         
         if (note.isRest) {
             sb.appendLine("""        <rest/>""")

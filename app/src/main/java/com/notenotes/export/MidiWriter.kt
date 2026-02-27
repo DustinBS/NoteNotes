@@ -110,11 +110,32 @@ class MidiWriter {
             track.write(pitch)
             track.write(velocity)
 
-            // Note off after duration
+            // Chord notes: additional note-on events with delta = 0
+            if (note.isChord) {
+                for (chordPitch in note.chordPitches) {
+                    writeVarLen(track, 0) // simultaneous
+                    track.write(NOTE_ON.toInt())
+                    track.write(chordPitch.coerceIn(0, 127))
+                    track.write(velocity)
+                }
+            }
+
+            // Note off after duration (primary note)
             writeVarLen(track, durationTicks)
             track.write(NOTE_OFF.toInt())
             track.write(pitch)
             track.write(0)  // release velocity
+
+            // Chord note-off events with delta = 0
+            if (note.isChord) {
+                for (chordPitch in note.chordPitches) {
+                    writeVarLen(track, 0)
+                    track.write(NOTE_OFF.toInt())
+                    track.write(chordPitch.coerceIn(0, 127))
+                    track.write(0)
+                }
+            }
+
             pendingDelta = 0
         }
 

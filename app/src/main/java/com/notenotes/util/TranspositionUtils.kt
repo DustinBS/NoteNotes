@@ -33,7 +33,10 @@ object TranspositionUtils {
         if (instrument.transposeSemitones == 0) return notes
         return notes.map { note ->
             if (note.isRest) note
-            else note.copy(midiPitch = transposeForInstrument(note.midiPitch, instrument))
+            else note.copy(
+                midiPitch = transposeForInstrument(note.midiPitch, instrument),
+                chordPitches = note.chordPitches.map { transposeForInstrument(it, instrument) }
+            )
         }
     }
 }

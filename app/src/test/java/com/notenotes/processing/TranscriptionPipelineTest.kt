@@ -16,6 +16,11 @@ class TranscriptionPipelineTest {
         }
     }
 
+    private fun generateSilence(durSec: Double, sr: Int = 44100): ShortArray {
+        val n = (sr * durSec).toInt()
+        return ShortArray(n)
+    }
+
     private fun concatenateWaves(vararg waves: ShortArray): ShortArray {
         val total = waves.sumOf { it.size }
         val result = ShortArray(total)
@@ -25,6 +30,22 @@ class TranscriptionPipelineTest {
             offset += wave.size
         }
         return result
+    }
+
+    /**
+     * Concatenate waves with a short silence gap between each.
+     * This simulates realistic note attacks where each note starts from silence,
+     * allowing the onset detector to detect individual note beginnings.
+     */
+    private fun concatenateWithGaps(gapSec: Double = 0.05, sr: Int = 44100, vararg waves: ShortArray): ShortArray {
+        val parts = mutableListOf<ShortArray>()
+        for ((i, wave) in waves.withIndex()) {
+            parts.add(wave)
+            if (i < waves.size - 1) {
+                parts.add(generateSilence(gapSec, sr))
+            }
+        }
+        return concatenateWaves(*parts.toTypedArray())
     }
 
     /**
@@ -45,7 +66,7 @@ class TranscriptionPipelineTest {
             523.25  // C5
         )
         val waves = frequencies.map { generateSineWave(it, noteDuration) }.toTypedArray()
-        val samples = concatenateWaves(*waves)
+        val samples = concatenateWithGaps(0.05, 44100, *waves)
 
         val result = pipeline.process(samples)
 
@@ -71,7 +92,7 @@ class TranscriptionPipelineTest {
             392.00  // G4
         )
         val waves = frequencies.map { generateSineWave(it, noteDuration) }.toTypedArray()
-        val samples = concatenateWaves(*waves)
+        val samples = concatenateWithGaps(0.05, 44100, *waves)
 
         val result = pipeline.process(samples)
 
@@ -96,7 +117,7 @@ class TranscriptionPipelineTest {
             783.99  // G5
         )
         val waves = frequencies.map { generateSineWave(it, noteDuration) }.toTypedArray()
-        val samples = concatenateWaves(*waves)
+        val samples = concatenateWithGaps(0.05, 44100, *waves)
 
         val result = pipeline.process(samples)
 
@@ -133,7 +154,7 @@ class TranscriptionPipelineTest {
         val noteDuration = 0.5
         val wave1 = generateSineWave(440.0, noteDuration)  // A4
         val wave2 = generateSineWave(493.88, noteDuration) // B4
-        val samples = concatenateWaves(wave1, wave2)
+        val samples = concatenateWithGaps(0.05, 44100, wave1, wave2)
 
         val result = pipeline.process(samples)
 

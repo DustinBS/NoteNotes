@@ -1,5 +1,8 @@
 Plans/
 *.txt
+test_audio_files/
+test_audio_wav/
+*.wav
 
 # Built application files
 *.apk

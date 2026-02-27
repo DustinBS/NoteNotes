@@ -74,6 +74,18 @@ class FileExporter(private val context: Context) {
     }
 
     /**
+     * Share an audio WAV file.
+     */
+    fun shareAudioFile(audioFile: File): Intent {
+        // Copy to exports dir so FileProvider can access it
+        val dir = File(context.filesDir, "exports")
+        dir.mkdirs()
+        val dest = File(dir, audioFile.name)
+        audioFile.copyTo(dest, overwrite = true)
+        return createShareIntent(dest, "audio/wav")
+    }
+
+    /**
      * Share both MIDI and MusicXML files.
      */
     fun shareAll(result: TranscriptionResult, filename: String): Intent {

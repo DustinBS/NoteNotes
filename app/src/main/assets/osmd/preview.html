@@ -48,6 +48,8 @@
     <script>
         var osmd = null;
         var isReady = false;
+        var totalMeasures = 0;
+        var cursorEnabled = false;
 
         // Initialize OSMD
         function initOSMD() {
@@ -64,7 +66,14 @@
                     drawMeasureNumbers: true,
                     drawTimeSignatures: true,
                     drawKeySignatures: true,
-                    drawMetronomeMarks: true
+                    drawMetronomeMarks: true,
+                    followCursor: true,
+                    cursorsOptions: [{
+                        type: 0,
+                        color: "#2196F3",
+                        alpha: 0.5,
+                        follow: true
+                    }]
                 });
                 isReady = true;
                 document.getElementById('loading').style.display = 'none';
@@ -91,6 +100,14 @@
             try {
                 osmd.load(xmlString).then(function() {
                     osmd.render();
+                    
+                    // Count total notes/beats for cursor navigation
+                    try {
+                        totalMeasures = osmd.sheet.sourceMeasures.length;
+                    } catch(e) {
+                        totalMeasures = 0;
+                    }
+                    
                     // Notify Android that rendering is complete
                     if (window.Android) {
                         window.Android.onRenderComplete();
@@ -100,6 +117,92 @@
                 });
             } catch (e) {
                 showError('Error: ' + e.message);
+            }
+        }
+
+        // Show the playback cursor
+        function showCursor() {
+            try {
+                if (osmd && osmd.cursor) {
+                    osmd.cursor.show();
+                    osmd.cursor.reset();
+                    cursorEnabled = true;
+                }
+            } catch (e) {
+                // Cursor may not be available
+            }
+        }
+
+        // Hide the playback cursor
+        function hideCursor() {
+            try {
+                if (osmd && osmd.cursor) {
+                    osmd.cursor.hide();
+                    cursorEnabled = false;
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        // Reset cursor to beginning
+        function resetCursor() {
+            try {
+                if (osmd && osmd.cursor) {
+                    osmd.cursor.reset();
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        // Advance cursor to next note
+        function nextCursor() {
+            try {
+                if (osmd && osmd.cursor && !osmd.cursor.iterator.endReached) {
+                    osmd.cursor.next();
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        // Move cursor to a specific fraction (0.0 - 1.0) of the piece
+        function setCursorToFraction(fraction) {
+            try {
+                if (!osmd || !osmd.cursor) return;
+                
+                osmd.cursor.reset();
+                if (!cursorEnabled) {
+                    osmd.cursor.show();
+                    cursorEnabled = true;
+                }
+                
+                // Count total steps
+                var totalSteps = 0;
+                var tempIterator = osmd.cursor.iterator;
+                
+                // First, count total steps by iterating through
+                osmd.cursor.reset();
+                totalSteps = 0;
+                while (!osmd.cursor.iterator.endReached) {
+                    totalSteps++;
+                    osmd.cursor.next();
+                }
+                
+                if (totalSteps === 0) return;
+                
+                // Now move to the target step
+                var targetStep = Math.floor(fraction * totalSteps);
+                targetStep = Math.max(0, Math.min(targetStep, totalSteps - 1));
+                
+                osmd.cursor.reset();
+                for (var i = 0; i < targetStep; i++) {
+                    if (osmd.cursor.iterator.endReached) break;
+                    osmd.cursor.next();
+                }
+            } catch (e) {
+                // ignore cursor errors
             }
         }
 

@@ -83,7 +83,17 @@ class RhythmQuantizer(
             // Quantize the note duration
             val durationBeats = note.durationSeconds / beatDurationSec
             val quantizedNotes = quantizeDuration(durationBeats, isRest = false, midiPitch = note.midiNote)
-            result.addAll(quantizedNotes)
+            // Carry chord info through to all quantized notes
+            if (note.isChord) {
+                result.addAll(quantizedNotes.map { qn ->
+                    qn.copy(
+                        chordPitches = note.chordMidiNotes,
+                        chordName = note.chordName
+                    )
+                })
+            } else {
+                result.addAll(quantizedNotes)
+            }
         }
 
         return result

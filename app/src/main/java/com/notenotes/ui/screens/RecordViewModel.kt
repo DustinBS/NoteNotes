@@ -59,6 +59,7 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
 
     val amplitudeLevel = audioRecorder.amplitudeLevel
     val recordingState = audioRecorder.state
+    val livePitch = audioRecorder.livePitch
 
     private var rawSamples: ShortArray? = null
 
@@ -134,12 +135,14 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
                     return@launch
                 }
 
-                // Apply instrument transposition
+                // Apply instrument transposition and set instrument info
                 val instrument = _selectedInstrument.value
                 if (instrument.transposeSemitones != 0) {
                     Log.d(TAG, "processRecording: Transposing ${instrument.transposeSemitones} semitones for ${instrument.name}")
                     val transposedNotes = TranspositionUtils.transposeNotes(result.notes, instrument)
-                    result = result.copy(notes = transposedNotes)
+                    result = result.copy(notes = transposedNotes, instrument = instrument)
+                } else {
+                    result = result.copy(instrument = instrument)
                 }
 
                 _transcriptionResult.value = result

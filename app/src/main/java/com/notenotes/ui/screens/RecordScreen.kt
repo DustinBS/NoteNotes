@@ -6,8 +6,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -17,11 +19,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.notenotes.audio.AudioRecorder
 import com.notenotes.model.InstrumentProfile
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,6 +42,7 @@ fun RecordScreen(
     val selectedInstrument by viewModel.selectedInstrument.collectAsState()
     val recordingDuration by viewModel.recordingDuration.collectAsState()
     val amplitudeLevel by viewModel.amplitudeLevel.collectAsState()
+    val livePitch by viewModel.livePitch.collectAsState()
     val context = LocalContext.current
 
     // Permission launcher
@@ -97,6 +102,10 @@ fun RecordScreen(
                     fontWeight = FontWeight.Light,
                     color = Color.Red
                 )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Music Tracer - shows detected note in real-time
+                MusicTracer(pitchInfo = livePitch)
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Amplitude indicator
@@ -263,4 +272,109 @@ private fun formatDuration(seconds: Double): String {
     val secs = (seconds % 60).toInt()
     val tenths = ((seconds % 1) * 10).toInt()
     return "%d:%02d.%d".format(mins, secs, tenths)
+}
+
+/**
+ * Music Tracer - Real-time display of detected pitch during recording.
+ * Shows note name, frequency, confidence, and cents deviation.
+ */
+@Composable
+private fun MusicTracer(pitchInfo: AudioRecorder.LivePitchInfo) {
+    val hasNote = pitchInfo.midiNote >= 0
+    val noteColor = if (hasNote) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth(0.8f)
+            .border(
+                width = 2.dp,
+                color = if (hasNote) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                       else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .background(
+                color = if (hasNote) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                       else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Note name (large)
+        Text(
+            text = pitchInfo.noteName,
+            fontSize = 48.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            color = noteColor,
+            textAlign = TextAlign.Center
+        )
+
+        if (hasNote) {
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Frequency and cents
+            Row(
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "${String.format("%.1f", pitchInfo.frequencyHz)} Hz",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val centsStr = if (pitchInfo.cents >= 0) "+${String.format("%.0f", pitchInfo.cents)}"
+                              else String.format("%.0f", pitchInfo.cents)
+                val centsColor = when {
+                    kotlin.math.abs(pitchInfo.cents) < 10 -> Color(0xFF4CAF50) // green = in tune
+                    kotlin.math.abs(pitchInfo.cents) < 25 -> Color(0xFFFFC107) // yellow
+                    else -> Color(0xFFF44336) // red = out of tune
+                }
+                Text(
+                    text = "$centsStr cents",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = centsColor
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Confidence bar
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Conf:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(36.dp)
+                )
+                LinearProgressIndicator(
+                    progress = pitchInfo.confidence.toFloat(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(6.dp),
+                    color = when {
+                        pitchInfo.confidence > 0.85 -> Color(0xFF4CAF50)
+                        pitchInfo.confidence > 0.7 -> Color(0xFFFFC107)
+                        else -> Color(0xFFF44336)
+                    }
+                )
+                Text(
+                    text = "${(pitchInfo.confidence * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(36.dp),
+                    textAlign = TextAlign.End
+                )
+            }
+        } else {
+            Text(
+                text = "Listening...",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
