@@ -16,6 +16,7 @@ fun SettingsScreen(
 ) {
     var selectedInstrument by remember { mutableStateOf(InstrumentProfile.GUITAR) }
     var defaultTempo by remember { mutableStateOf("120") }
+    var windowSize by remember { mutableFloatStateOf(5f) }
 
     Scaffold(
         topBar = {
@@ -97,6 +98,32 @@ fun SettingsScreen(
                 label = { Text("Default Tempo (BPM)") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Waveform window size
+            Text(
+                text = "Waveform Settings",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Text(
+                text = "Window Size: ${windowSize.toInt()}s",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Slider(
+                value = windowSize,
+                onValueChange = { windowSize = it },
+                valueRange = 1f..30f,
+                steps = 28,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = "Controls how many seconds of audio are shown in the waveform view at once.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Spacer(modifier = Modifier.height(32.dp))

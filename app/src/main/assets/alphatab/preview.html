@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Sheet Music Preview</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background-color: #FFFFFF;
+            overflow-x: auto;
+            overflow-y: auto;
+            font-family: sans-serif;
+        }
+        #alphaTab {
+            width: 100%;
+            min-height: 300px;
+        }
+        #loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            color: #666;
+            font-size: 16px;
+        }
+        #error {
+            display: none;
+            color: #D32F2F;
+            padding: 16px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">Loading sheet music renderer...</div>
+    <div id="error"></div>
+    <div id="alphaTab"></div>
+
+    <script src="alphaTab.min.js"></script>
+
+    <script>
+        var api = null;
+        var isReady = false;
+        var pendingXml = null;
+
+        function initAlphaTab() {
+            try {
+                var container = document.getElementById('alphaTab');
+
+                api = new alphaTab.AlphaTabApi(container, {
+                    core: {
+                        fontDirectory: 'font/',
+                        tex: false,
+                        useWorkers: false,
+                        logLevel: 1  // Warning
+                    },
+                    display: {
+                        staveProfile: 1,       // ScoreTab = standard notation + guitar tab
+                        layoutMode: 0,         // Page layout
+                        scale: 0.9,
+                        barsPerRow: -1
+                    },
+                    notation: {
+                        rhythmMode: 1,         // ShowWithBars - show rhythm on tab staff
+                        smallGraceTabNotes: true
+                    },
+                    player: {
+                        enablePlayer: false,
+                        enableCursor: false,
+                        enableUserInteraction: false
+                    }
+                });
+
+                api.renderStarted.on(function() {
+                    document.getElementById('loading').style.display = 'none';
+                });
+
+                api.renderFinished.on(function() {
+                    if (window.Android) {
+                        window.Android.onRenderComplete();
+                    }
+                });
+
+                api.error.on(function(e) {
+                    showError('alphaTab error: ' + (e.message || e));
+                });
+
+                api.scoreLoaded.on(function(score) {
+                    // Fix: MusicXML <staff-tuning> parser sets showStandardNotation=false
+                    // and standardNotationLineCount=6 (from <staff-lines>6</staff-lines>).
+                    // Re-enable score display and fix line count for ScoreTab profile.
+                    try {
+                        for (var t = 0; t < score.tracks.length; t++) {
+                            var track = score.tracks[t];
+                            for (var s = 0; s < track.staves.length; s++) {
+                                var staff = track.staves[s];
+                                staff.showStandardNotation = true;
+                                staff.showTablature = true;
+                                staff.standardNotationLineCount = 5;
+                            }
+                        }
+                    } catch (ex) {
+                        // Non-fatal: tab still renders even if score fix fails
+                    }
+                    if (window.Android && typeof window.Android.onScoreLoaded === 'function') {
+                        window.Android.onScoreLoaded(score.tracks.length);
+                    }
+                });
+
+                isReady = true;
+                document.getElementById('loading').style.display = 'none';
+
+                if (window.Android) {
+                    window.Android.onOsmdReady();
+                }
+
+                // If MusicXML was sent before initialization completed
+                if (pendingXml) {
+                    loadMusicXmlData(pendingXml);
+                    pendingXml = null;
+                }
+            } catch (e) {
+                showError('Failed to initialize alphaTab: ' + e.message);
+            }
+        }
+
+        // Load MusicXML string data
+        function loadMusicXml(xmlString) {
+            if (!api || !isReady) {
+                pendingXml = xmlString;
+                return;
+            }
+            loadMusicXmlData(xmlString);
+        }
+
+        function loadMusicXmlData(xmlString) {
+            try {
+                document.getElementById('error').style.display = 'none';
+                document.getElementById('alphaTab').style.display = 'block';
+
+                // Convert string to ArrayBuffer for alphaTab's load method
+                var encoder = new TextEncoder();
+                var data = encoder.encode(xmlString);
+                api.load(data.buffer, [0]);
+            } catch (e) {
+                showError('Error loading MusicXML: ' + e.message);
+            }
+        }
+
+        // Show/hide cursor (kept for API compatibility with SheetMusicWebView)
+        function showCursor() {
+            // alphaTab cursor is disabled; no-op
+        }
+
+        function hideCursor() {
+            // no-op
+        }
+
+        function resetCursor() {
+            // no-op
+        }
+
+        function nextCursor() {
+            // no-op
+        }
+
+        function setCursorToFraction(fraction) {
+            // alphaTab cursor is disabled; no-op
+        }
+
+        function showError(message) {
+            var errorDiv = document.getElementById('error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            document.getElementById('loading').style.display = 'none';
+
+            if (window.Android) {
+                window.Android.onError(message);
+            }
+        }
+
+        function clearDisplay() {
+            if (api) {
+                // Reset by loading empty
+                document.getElementById('alphaTab').innerHTML = '';
+            }
+        }
+
+        function setScale(scale) {
+            if (api) {
+                api.settings.display.scale = scale;
+                api.updateSettings();
+                api.render();
+            }
+        }
+
+        function setBarsPerRow(bars) {
+            if (api) {
+                api.settings.display.barsPerRow = bars;
+                api.updateSettings();
+                api.render();
+            }
+        }
+
+        // Initialize when page loads
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initAlphaTab);
+        } else {
+            initAlphaTab();
+        }
+    </script>
+</body>
+</html>

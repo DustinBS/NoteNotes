@@ -1,6 +1,7 @@
 package com.notenotes.ui.components
 
 import android.annotation.SuppressLint
+import android.util.Log
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
@@ -21,6 +22,9 @@ fun SheetMusicWebView(
     modifier: Modifier = Modifier,
     playbackProgress: Float = 0f,
     isPlaying: Boolean = false,
+    barsPerRow: Int = -1,
+    scale: Float = 0.9f,
+    onWebViewReady: ((WebView) -> Unit)? = null,
     onReady: () -> Unit = {},
     onRenderComplete: () -> Unit = {},
     onError: (String) -> Unit = {}
@@ -60,6 +64,20 @@ fun SheetMusicWebView(
         } else if (cursorShown && !isPlaying) {
             wv.evaluateJavascript("hideCursor()", null)
             cursorShown = false
+        }
+    }
+
+    // Update bars per row when setting changes
+    LaunchedEffect(barsPerRow, isOsmdReady) {
+        if (isOsmdReady) {
+            webView?.evaluateJavascript("setBarsPerRow($barsPerRow)", null)
+        }
+    }
+
+    // Update scale when setting changes
+    LaunchedEffect(scale, isOsmdReady) {
+        if (isOsmdReady) {
+            webView?.evaluateJavascript("setScale($scale)", null)
         }
     }
 
@@ -116,14 +134,20 @@ fun SheetMusicWebView(
                     }
 
                     @JavascriptInterface
+                    fun onScoreLoaded(trackCount: Int) {
+                        Log.d("SheetMusic", "Score loaded with $trackCount track(s)")
+                    }
+
+                    @JavascriptInterface
                     fun onError(message: String) {
                         post { onError(message) }
                     }
                 }, "Android")
 
                 webViewClient = WebViewClient()
-                loadUrl("file:///android_asset/osmd/preview.html")
+                loadUrl("file:///android_asset/alphatab/preview.html")
                 webView = this
+                onWebViewReady?.invoke(this)
             }
         },
         update = { view ->

@@ -27,6 +27,13 @@ class MusicXmlGenerator {
         sb.appendLine("""  <part-list>""")
         sb.appendLine("""    <score-part id="P1">""")
         sb.appendLine("""      <part-name>$partName</part-name>""")
+        sb.appendLine("""      <score-instrument id="P1-I1">""")
+        sb.appendLine("""        <instrument-name>Guitar</instrument-name>""")
+        sb.appendLine("""      </score-instrument>""")
+        sb.appendLine("""      <midi-instrument id="P1-I1">""")
+        sb.appendLine("""        <midi-channel>1</midi-channel>""")
+        sb.appendLine("""        <midi-program>26</midi-program>""")
+        sb.appendLine("""      </midi-instrument>""")
         sb.appendLine("""    </score-part>""")
         sb.appendLine("""  </part-list>""")
         
@@ -60,33 +67,29 @@ class MusicXmlGenerator {
 
     /**
      * Distribute notes into measures based on time signature.
+     * Single staff with guitar technical notation (<string>/<fret>).
+     * alphaTab handles Score+Tab rendering via staveProfile.
      */
     private fun appendMeasures(sb: StringBuilder, result: TranscriptionResult) {
         val divisions = result.divisions
         val beatsPerMeasure = result.timeSignature.beats
         val beatType = result.timeSignature.beatType
         
-        // Ticks per measure: for 4/4 with divisions=4, that's 4*4=16 ticks
-        // For 3/4 with divisions=4, that's 3*4=12 ticks
-        // For 6/8 with divisions=4, divisions is per quarter, 
-        //   so 6/8 = 6 eighth notes = 3 quarter notes worth = 12 ticks
         val ticksPerMeasure = when (beatType) {
-            8 -> beatsPerMeasure * divisions / 2   // eighth note = half a quarter
-            2 -> beatsPerMeasure * divisions * 2   // half note = two quarters
-            else -> beatsPerMeasure * divisions     // quarter note = 1 division unit
+            8 -> beatsPerMeasure * divisions / 2
+            2 -> beatsPerMeasure * divisions * 2
+            else -> beatsPerMeasure * divisions
         }
         
         var measureNumber = 1
         var ticksInCurrentMeasure = 0
         var noteIndex = 0
-        var pendingTieStop = false  // true when the next note is a tied continuation
-        // Use mutable list so cross-barline splits can replace the current note with remainder
+        var pendingTieStop = false
         val notes = result.notes.toMutableList()
         
         while (noteIndex < notes.size) {
             sb.appendLine("""    <measure number="$measureNumber">""")
             
-            // Attributes on first measure
             if (measureNumber == 1) {
                 appendAttributes(sb, result)
                 appendTempoDirection(sb, result.tempoBpm)
@@ -100,12 +103,22 @@ class MusicXmlGenerator {
                 
                 if (note.durationTicks <= remainingTicks) {
                     // Note fits in current measure
-                    appendNote(sb, note, divisions, result.keySignature.fifths, tieStop = pendingTieStop)
-                    // Append chord notes (same duration, with <chord/> tag)
+                    appendNote(sb, note, divisions, result.keySignature.fifths,
+                        tieStart = false, tieStop = pendingTieStop, isChordNote = false)
+                    // Chord notes
                     if (note.isChord) {
-                        for (chordPitch in note.chordPitches) {
-                            val chordNote = note.copy(midiPitch = chordPitch, chordPitches = emptyList(), chordName = null)
-                            appendNote(sb, chordNote, divisions, result.keySignature.fifths, isChordNote = true)
+                        for ((i, chordPitch) in note.chordPitches.withIndex()) {
+                            val pos = note.chordStringFrets.getOrNull(i)
+                            val chordNote = note.copy(
+                                midiPitch = chordPitch,
+                                guitarString = pos?.first,
+                                guitarFret = pos?.second,
+                                chordPitches = emptyList(),
+                                chordStringFrets = emptyList(),
+                                chordName = null
+                            )
+                            appendNote(sb, chordNote, divisions, result.keySignature.fifths,
+                                tieStart = false, tieStop = false, isChordNote = true)
                         }
                     }
                     pendingTieStop = false
@@ -116,47 +129,51 @@ class MusicXmlGenerator {
                     val remainingDuration = note.durationTicks - remainingTicks
                     
                     if (!note.isRest) {
-                        // First part: fills remaining space in this measure (tie start)
                         val firstPart = note.copy(
                             durationTicks = remainingTicks,
                             type = ticksToType(remainingTicks, divisions),
                             dotted = false,
                             tiedToNext = true
                         )
-                        appendNote(sb, firstPart, divisions, result.keySignature.fifths, tieStart = true, tieStop = pendingTieStop)
-                        // Chord notes for the first part of the tie  
+                        appendNote(sb, firstPart, divisions, result.keySignature.fifths,
+                            tieStart = true, tieStop = pendingTieStop, isChordNote = false)
                         if (note.isChord) {
-                            for (chordPitch in note.chordPitches) {
-                                val chordNote = firstPart.copy(midiPitch = chordPitch, chordPitches = emptyList(), chordName = null)
-                                appendNote(sb, chordNote, divisions, result.keySignature.fifths, tieStart = true, isChordNote = true)
+                            for ((i, chordPitch) in note.chordPitches.withIndex()) {
+                                val pos = note.chordStringFrets.getOrNull(i)
+                                val chordNote = firstPart.copy(
+                                    midiPitch = chordPitch,
+                                    guitarString = pos?.first,
+                                    guitarFret = pos?.second,
+                                    chordPitches = emptyList(),
+                                    chordStringFrets = emptyList(),
+                                    chordName = null
+                                )
+                                appendNote(sb, chordNote, divisions, result.keySignature.fifths,
+                                    tieStart = true, tieStop = false, isChordNote = true)
                             }
                         }
                         pendingTieStop = false
                         
-                        // Replace current note with remainder for next measure (tie stop)
                         notes[noteIndex] = note.copy(
                             durationTicks = remainingDuration,
                             type = ticksToType(remainingDuration, divisions),
                             dotted = false,
                             tiedToNext = false
                         )
-                        pendingTieStop = true  // next iteration picks up the tie stop
+                        pendingTieStop = true
                     } else {
-                        // Rest: fill remaining and carry over the rest
                         val restPart = note.copy(
                             durationTicks = remainingTicks,
                             type = ticksToType(remainingTicks, divisions)
                         )
-                        appendNote(sb, restPart, divisions, result.keySignature.fifths)
+                        appendNote(sb, restPart, divisions, result.keySignature.fifths,
+                            tieStart = false, tieStop = false, isChordNote = false)
                         
-                        // Replace current note with remainder rest for next measure
                         notes[noteIndex] = note.copy(
                             durationTicks = remainingDuration,
                             type = ticksToType(remainingDuration, divisions)
                         )
                     }
-                    // Do NOT increment noteIndex — the remainder stays at current index
-                    // for the next measure iteration
                     ticksInCurrentMeasure = ticksPerMeasure
                     break
                 }
@@ -171,7 +188,9 @@ class MusicXmlGenerator {
                     type = ticksToType(restTicks, divisions),
                     isRest = true
                 )
-                appendNote(sb, restNote, divisions, result.keySignature.fifths)
+                appendNote(sb, restNote, divisions, result.keySignature.fifths,
+                    tieStart = false, tieStop = false, isChordNote = false)
+                ticksInCurrentMeasure = ticksPerMeasure
             }
             
             sb.appendLine("""    </measure>""")
@@ -181,6 +200,7 @@ class MusicXmlGenerator {
 
     /**
      * Append the attributes element (divisions, key, time, clef).
+     * Single staff — alphaTab handles Score+Tab rendering via staveProfile.
      */
     private fun appendAttributes(sb: StringBuilder, result: TranscriptionResult) {
         sb.appendLine("""      <attributes>""")
@@ -197,16 +217,45 @@ class MusicXmlGenerator {
         sb.appendLine("""          <beats>${result.timeSignature.beats}</beats>""")
         sb.appendLine("""          <beat-type>${result.timeSignature.beatType}</beat-type>""")
         sb.appendLine("""        </time>""")
-        sb.appendLine("""        <clef>""")
         val clefSign = result.instrument?.clefSign ?: "G"
         val clefLine = result.instrument?.clefLine ?: 2
         val clefOctaveChange = result.instrument?.clefOctaveChange ?: 0
+        sb.appendLine("""        <clef>""")
         sb.appendLine("""          <sign>$clefSign</sign>""")
         sb.appendLine("""          <line>$clefLine</line>""")
         if (clefOctaveChange != 0) {
             sb.appendLine("""          <clef-octave-change>$clefOctaveChange</clef-octave-change>""")
         }
         sb.appendLine("""        </clef>""")
+        // Standard guitar tuning for tab staff rendering
+        sb.appendLine("""        <staff-details>""")
+        sb.appendLine("""          <staff-lines>6</staff-lines>""")
+        // Tuning from low to high: E2, A2, D3, G3, B3, E4
+        sb.appendLine("""          <staff-tuning line="1">""")
+        sb.appendLine("""            <tuning-step>E</tuning-step>""")
+        sb.appendLine("""            <tuning-octave>2</tuning-octave>""")
+        sb.appendLine("""          </staff-tuning>""")
+        sb.appendLine("""          <staff-tuning line="2">""")
+        sb.appendLine("""            <tuning-step>A</tuning-step>""")
+        sb.appendLine("""            <tuning-octave>2</tuning-octave>""")
+        sb.appendLine("""          </staff-tuning>""")
+        sb.appendLine("""          <staff-tuning line="3">""")
+        sb.appendLine("""            <tuning-step>D</tuning-step>""")
+        sb.appendLine("""            <tuning-octave>3</tuning-octave>""")
+        sb.appendLine("""          </staff-tuning>""")
+        sb.appendLine("""          <staff-tuning line="4">""")
+        sb.appendLine("""            <tuning-step>G</tuning-step>""")
+        sb.appendLine("""            <tuning-octave>3</tuning-octave>""")
+        sb.appendLine("""          </staff-tuning>""")
+        sb.appendLine("""          <staff-tuning line="5">""")
+        sb.appendLine("""            <tuning-step>B</tuning-step>""")
+        sb.appendLine("""            <tuning-octave>3</tuning-octave>""")
+        sb.appendLine("""          </staff-tuning>""")
+        sb.appendLine("""          <staff-tuning line="6">""")
+        sb.appendLine("""            <tuning-step>E</tuning-step>""")
+        sb.appendLine("""            <tuning-octave>4</tuning-octave>""")
+        sb.appendLine("""          </staff-tuning>""")
+        sb.appendLine("""        </staff-details>""")
         sb.appendLine("""      </attributes>""")
     }
 
@@ -225,7 +274,8 @@ class MusicXmlGenerator {
     }
 
     /**
-     * Append a single note or rest element.
+     * Append a single note or rest element with guitar technical notation.
+     * alphaTab uses string/fret data to render the TAB staff correctly.
      */
     private fun appendNote(
         sb: StringBuilder,
@@ -272,14 +322,25 @@ class MusicXmlGenerator {
             sb.appendLine("""        <dot/>""")
         }
         
-        // Notations for ties
-        if (tieStart || tieStop || note.tiedToNext) {
+        // Notations for ties and guitar tablature
+        val hasTie = tieStart || tieStop || note.tiedToNext
+        val hasTab = note.hasTab && !note.isRest
+        if (hasTie || hasTab) {
             sb.appendLine("""        <notations>""")
             if (tieStart || note.tiedToNext) {
                 sb.appendLine("""          <tied type="start"/>""")
             }
             if (tieStop) {
                 sb.appendLine("""          <tied type="stop"/>""")
+            }
+            // Guitar tablature: <string> and <fret> in <technical>
+            if (hasTab) {
+                sb.appendLine("""          <technical>""")
+                // guitarString is 0-based (0=Low E), MusicXML <string> is 1=High E, 6=Low E
+                val stringNum = 6 - (note.guitarString ?: 0)
+                sb.appendLine("""            <string>$stringNum</string>""")
+                sb.appendLine("""            <fret>${note.guitarFret ?: 0}</fret>""")
+                sb.appendLine("""          </technical>""")
             }
             sb.appendLine("""        </notations>""")
         }
@@ -292,11 +353,10 @@ class MusicXmlGenerator {
      */
     private fun appendWholeRest(sb: StringBuilder, result: TranscriptionResult) {
         val totalTicks = result.timeSignature.beats * result.divisions
+        val restType = ticksToType(totalTicks, result.divisions)
         sb.appendLine("""      <note>""")
         sb.appendLine("""        <rest measure="yes"/>""")
         sb.appendLine("""        <duration>$totalTicks</duration>""")
-        // For measure="yes" rests, the type should match the actual time signature
-        val restType = ticksToType(totalTicks, result.divisions)
         sb.appendLine("""        <type>$restType</type>""")
         sb.appendLine("""      </note>""")
     }

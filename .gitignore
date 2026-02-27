@@ -4,6 +4,7 @@ test_audio_files/
 test_audio_wav/
 *.wav
 *.py
+.vscode/settings.json
 
 # Built application files
 *.apk

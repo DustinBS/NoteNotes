@@ -3,4 +3,5 @@
     <files-path name="exports" path="exports/" />
     <files-path name="audio" path="audio/" />
     <cache-path name="cache" path="/" />
+    <external-path name="external_music" path="Music/NoteNotes/" />
 </paths>
