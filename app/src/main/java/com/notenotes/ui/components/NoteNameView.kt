@@ -3,12 +3,18 @@ package com.notenotes.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -18,11 +24,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.notenotes.model.MusicalNote
+import com.notenotes.util.GuitarUtils
+import com.notenotes.util.PitchUtils
 import com.notenotes.util.GuitarUtils
 import com.notenotes.util.PitchUtils
 
@@ -35,6 +44,37 @@ import com.notenotes.util.PitchUtils
 fun NoteNameView(
     notes: List<MusicalNote>,
     modifier: Modifier = Modifier,
+    tempoBpm: Int = 120,
+    onUpdateNote: ((Int, Int, Int) -> Unit)? = null,  // (index, guitarString, guitarFret)
+    onDeleteNote: ((Int) -> Unit)? = null,
+    onUpdateChordNote: ((Int, List<Int>, List<Pair<Int, Int>>) -> Unit)? = null  // (index, newChordPitches, newChordStringFrets)
+) {
+    // Edit dialog state
+    var editingNoteIndex by remember { mutableStateOf<Int?>(null) }
+
+    // Show edit dialog
+    editingNoteIndex?.let { idx ->
+        if (idx in notes.indices) {
+            NoteEditDialog(
+                note = notes[idx],
+                noteIndex = idx,
+                onDismiss = { editingNoteIndex = null },
+                onSave = { index, guitarString, guitarFret ->
+                    onUpdateNote?.invoke(index, guitarString, guitarFret)
+                    editingNoteIndex = null
+                },
+                onDelete = {
+                    onDeleteNote?.invoke(idx)
+                    editingNoteIndex = null
+                },
+                onUpdateChordPitches = { index, newPitches, newPositions ->
+                    onUpdateChordNote?.invoke(index, newPitches, newPositions)
+                    editingNoteIndex = null
+                }
+            )
+        }
+    }
+
     tempoBpm: Int = 120,
     onUpdateNote: ((Int, Int, Int) -> Unit)? = null,  // (index, guitarString, guitarFret)
     onDeleteNote: ((Int) -> Unit)? = null,
@@ -86,8 +126,10 @@ fun NoteNameView(
         modifier = modifier
             .fillMaxSize()
             .padding(6.dp)
+            .padding(6.dp)
             .verticalScroll(rememberScrollState())
     ) {
+        // Compact note chips row
         // Compact note chips row
         val horizontalScroll = rememberScrollState()
         Row(
@@ -103,6 +145,7 @@ fun NoteNameView(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         var beatCounter = 0.0
         val beatDuration = 60.0 / tempoBpm // seconds per beat
@@ -113,6 +156,10 @@ fun NoteNameView(
             NoteNameRow(
                 note = note,
                 index = index + 1,
+                beatPosition = beatPosition,
+                onClick = if (onUpdateNote != null || onDeleteNote != null) {
+                    { editingNoteIndex = index }
+                } else null
                 beatPosition = beatPosition,
                 onClick = if (onUpdateNote != null || onDeleteNote != null) {
                     { editingNoteIndex = index }
@@ -211,6 +258,8 @@ private fun NoteNameRow(
     index: Int,
     beatPosition: Double,
     onClick: (() -> Unit)? = null
+    beatPosition: Double,
+    onClick: (() -> Unit)? = null
 ) {
     val bgColor = when {
         note.isRest -> Color.Transparent
@@ -226,6 +275,7 @@ private fun NoteNameRow(
             .clip(RoundedCornerShape(4.dp))
             .background(bgColor)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -235,10 +285,18 @@ private fun NoteNameRow(
         } else {
             String.format("%.1f", beatPosition + 1)
         }
+        // Beat position or time position for manual notes
+        val posLabel = if (note.isManual && note.timePositionMs != null) {
+            String.format("%.1fs", note.timePositionMs / 1000f)
+        } else {
+            String.format("%.1f", beatPosition + 1)
+        }
         Text(
+            text = posLabel,
             text = posLabel,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(44.dp)
             modifier = Modifier.width(44.dp)
         )
 
@@ -307,6 +365,7 @@ private fun NoteNameRow(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.End,
+            modifier = Modifier.width(40.dp)
             modifier = Modifier.width(40.dp)
         )
     }

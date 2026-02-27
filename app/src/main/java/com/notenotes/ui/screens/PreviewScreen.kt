@@ -48,29 +48,9 @@ fun PreviewScreen(
     val audioDurationMs by viewModel.audioDurationMs.collectAsState()
     
     val isRetranscribing by viewModel.isRetranscribing.collectAsState()
-    val selectedNoteIndex by viewModel.selectedNoteIndex.collectAsState()
-    val editCursorFraction by viewModel.editCursorFraction.collectAsState()
-    val isEditorOpen by viewModel.isEditorOpen.collectAsState()
     
-    // Window state
-    val windowStartFraction by viewModel.windowStartFraction.collectAsState()
-    val windowSizeSec by viewModel.windowSizeSec.collectAsState()
-    val isWindowLocked by viewModel.isWindowLocked.collectAsState()
-    val isRenameDialogOpen by viewModel.isRenameDialogOpen.collectAsState()
-
-    // Tab state: 0 = Sheet+Tab, 1 = Note Names, 2 = Waveform
-    var selectedTab by remember { mutableIntStateOf(2) }
-
-    // Sheet display settings
-    var sheetBarsPerRow by remember { mutableIntStateOf(-1) }  // -1 = auto
-    var sheetScale by remember { mutableFloatStateOf(0.9f) }
-    var sheetWebView by remember { mutableStateOf<android.webkit.WebView?>(null) }
-
-    // Clear all confirmation dialog
-    var showClearDialog by remember { mutableStateOf(false) }
-    var showKeyDialog by remember { mutableStateOf(false) }
-    var showTimeDialog by remember { mutableStateOf(false) }
-    var showBpmDialog by remember { mutableStateOf(false) }
+    // Tab state: 0 = Sheet Music, 1 = Note Names, 2 = Waveform
+    var selectedTab by remember { mutableIntStateOf(0) }
 
     // Load idea on first composition
     LaunchedEffect(ideaId) {
@@ -322,151 +302,15 @@ fun PreviewScreen(
                                 leadingIcon = { Icon(Icons.Filled.Description, contentDescription = null) }
                             )
                             DropdownMenuItem(
-                                text = { Text("Audio") },
-                                onClick = { showMenu = false; viewModel.shareAudio(context) },
+                                text = { Text("Share Audio") },
+                                onClick = {
+                                    showExportMenu = false
+                                    viewModel.shareAudio(context)
+                                },
                                 leadingIcon = { Icon(Icons.Filled.GraphicEq, contentDescription = null) }
                             )
                             DropdownMenuItem(
-                                text = { Text("All Files") },
-                                onClick = { showMenu = false; viewModel.shareAll(context) },
-                                leadingIcon = { Icon(Icons.Filled.FolderOpen, contentDescription = null) }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("PDF (Sheet Music)") },
-                                onClick = {
-                                    showMenu = false
-                                    sheetWebView?.let { wv ->
-                                        val printManager = context.getSystemService(android.content.Context.PRINT_SERVICE) as android.print.PrintManager
-                                        val adapter = wv.createPrintDocumentAdapter(idea?.title ?: "Sheet Music")
-                                        printManager.print("${idea?.title ?: "NoteNotes"} Sheet Music", adapter, null)
-                                    }
-                                },
-                                leadingIcon = { Icon(Icons.Filled.PictureAsPdf, contentDescription = null) },
-                                enabled = sheetWebView != null
-                            )
-
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                            // ── Display ──
-                            Text(
-                                "Display",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
-                            // Window size control (inline)
-                            DropdownMenuItem(
-                                text = {
-                                    Column(modifier = Modifier.fillMaxWidth()) {
-                                        var windowText by remember(windowSizeSec) {
-                                            mutableStateOf(String.format("%.0f", windowSizeSec))
-                                        }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                "Window",
-                                                style = MaterialTheme.typography.bodySmall
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            OutlinedTextField(
-                                                value = windowText,
-                                                onValueChange = { newVal ->
-                                                    windowText = newVal.filter { c -> c.isDigit() || c == '.' }
-                                                },
-                                                keyboardOptions = KeyboardOptions(
-                                                    keyboardType = KeyboardType.Number,
-                                                    imeAction = ImeAction.Done
-                                                ),
-                                                keyboardActions = KeyboardActions(
-                                                    onDone = {
-                                                        windowText.toFloatOrNull()?.let { v ->
-                                                            viewModel.setWindowSizeSec(v)
-                                                        }
-                                                    }
-                                                ),
-                                                singleLine = true,
-                                                textStyle = MaterialTheme.typography.bodySmall,
-                                                modifier = Modifier
-                                                    .width(72.dp)
-                                                    .height(48.dp),
-                                                suffix = { Text("s", style = MaterialTheme.typography.labelSmall) }
-                                            )
-                                        }
-                                        Slider(
-                                            value = windowSizeSec,
-                                            onValueChange = { viewModel.setWindowSizeSec(it) },
-                                            valueRange = 1f..30f,
-                                            steps = 28
-                                        )
-                                    }
-                                },
-                                onClick = {},
-                                enabled = true,
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
-                            )
-                            // Bars per row control
-                            DropdownMenuItem(
-                                text = {
-                                    Column(modifier = Modifier.fillMaxWidth()) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("Bars/Row", style = MaterialTheme.typography.bodySmall)
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                if (sheetBarsPerRow == -1) "Auto" else "$sheetBarsPerRow",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
-                                        Slider(
-                                            value = sheetBarsPerRow.toFloat(),
-                                            onValueChange = { sheetBarsPerRow = it.toInt() },
-                                            valueRange = -1f..8f,
-                                            steps = 8
-                                        )
-                                    }
-                                },
-                                onClick = {},
-                                enabled = true,
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
-                            )
-                            // Scale control
-                            DropdownMenuItem(
-                                text = {
-                                    Column(modifier = Modifier.fillMaxWidth()) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("Scale", style = MaterialTheme.typography.bodySmall)
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                String.format("%.1fx", sheetScale),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
-                                        Slider(
-                                            value = sheetScale,
-                                            onValueChange = { sheetScale = ((it * 10).toInt() / 10f) },
-                                            valueRange = 0.5f..2.0f,
-                                            steps = 14
-                                        )
-                                    }
-                                },
-                                onClick = {},
-                                enabled = true,
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
-                            )
-
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                            // ── Recording ──
-                            Text(
-                                "Recording",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Settings") },
+                                text = { Text("Share All") },
                                 onClick = {
                                     showMenu = false
                                     onNavigateToSettings?.invoke()
@@ -666,48 +510,16 @@ fun PreviewScreen(
                             playbackProgress = playbackProgress,
                             durationMs = audioDurationMs,
                             tempoBpm = idea?.tempoBpm ?: 120,
-                            onSeek = { fraction -> viewModel.seekAudioOnly(fraction) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp),
-                            selectedNoteIndex = selectedNoteIndex,
-                            editCursorFraction = editCursorFraction,
-                            onNoteSelected = { idx -> viewModel.selectNote(idx) },
-                            onEditCursorSet = { frac -> viewModel.setEditCursor(frac) },
-                            windowStartFraction = windowStartFraction,
-                            windowSizeSec = windowSizeSec
-                        )
-
-                        // Always-visible note editor
-                        NoteEditorPanel(
-                            editCursorActive = editCursorFraction != null,
-                            timePointSeconds = (editCursorFraction ?: 0f) * audioDurationMs / 1000f,
-                            onAddNote = { editorNotes ->
-                                viewModel.addNote(editorNotes)
-                            },
-                            onDeleteSelected = if (selectedNoteIndex != null) {
-                                { viewModel.deleteSelectedNote() }
-                            } else null,
-                            onClearAll = { showClearDialog = true },
-                            hasSelectedNote = selectedNoteIndex != null,
-                            selectedNote = viewModel.selectedNote,
-                            selectedNoteIndex = selectedNoteIndex,
-                            canSplitAtCursor = viewModel.isCursorInsideNote(),
-                            onSplitAtCursor = { viewModel.splitNoteAtCursor() },
-                            onUpdateNote = { index, guitarString, guitarFret ->
-                                viewModel.updateNoteAt(index, guitarString, guitarFret)
-                            },
-                            onUpdateChordNote = { index, pitches, stringFrets ->
-                                viewModel.updateChordPitches(index, pitches, stringFrets)
-                            }
+                            onSeek = { fraction -> viewModel.seekTo(fraction) },
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
                 }
             }
 
-            HorizontalDivider()
+            Divider()
 
-            // Transport controls with window navigation
+            // Playback controls with progress bar
             TransportControls(
                 playbackState = playbackState,
                 onPlay = { viewModel.playVoiceMemo() },
