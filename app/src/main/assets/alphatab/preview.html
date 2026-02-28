@@ -39,10 +39,18 @@
                 width: 100% !important;
                 margin: 0 !important;
                 padding: 0 !important;
+                overflow: visible !important;
             }
             #alphaTab {
                 width: 100% !important;
                 transform: none !important;
+                overflow: visible !important;
+            }
+            .at-surface {
+                width: 100% !important;
+            }
+            #loading, #error, #pdf-debug {
+                display: none !important;
             }
         }
     </style>
@@ -50,6 +58,7 @@
 <body>
     <div id="loading">Loading sheet music renderer...</div>
     <div id="error"></div>
+    <div id="pdf-debug" style="display:none; padding:8px; background:#fffde7; border:1px solid #fbc02d; font-size:11px; font-family:monospace; white-space:pre-wrap;"></div>
     <div id="alphaTab"></div>
 
     <script src="alphaTab.min.js"></script>
@@ -89,9 +98,12 @@
 
                 api.renderStarted.on(function() {
                     document.getElementById('loading').style.display = 'none';
+                    pdfLog('renderStarted: scale=' + api.settings.display.scale + ', width=' + api.settings.display.width + ', viewport=' + window.innerWidth + 'x' + window.innerHeight);
                 });
 
                 api.renderFinished.on(function() {
+                    var surface = document.querySelector('.at-surface');
+                    pdfLog('renderFinished: surface=' + (surface ? surface.offsetWidth + 'x' + surface.offsetHeight : 'null') + ', container=' + document.getElementById('alphaTab').offsetWidth);
                     if (window.Android) {
                         window.Android.onRenderComplete();
                     }
@@ -372,25 +384,152 @@
             }
         }
 
-        // Prepare for PDF printing: re-render at print-friendly width
+        // ══════════════════════════════════════════════════════════════
+        // PDF EXPORT — logging + dimension tracking
+        // ══════════════════════════════════════════════════════════════
         var printReadyCallback = null;
         var savedScale = 0.9;
         var savedWidth = -1;
         var savedBarsPerRow = -1;
+        var savedViewportContent = null;
 
+        function pdfLog(msg) {
+            console.log('[PDF] ' + msg);
+            if (window.Android && typeof window.Android.onPdfLog === 'function') {
+                window.Android.onPdfLog(msg);
+            }
+        }
+
+        /**
+         * Dump all dimensions relevant to PDF rendering.
+         * Returns a JSON string and optionally shows it in-page.
+         */
+        function dumpPdfDebugInfo(showInPage) {
+            var container = document.getElementById('alphaTab');
+            var surface = document.querySelector('.at-surface');
+            var info = {
+                viewport: {
+                    innerWidth: window.innerWidth,
+                    innerHeight: window.innerHeight,
+                    devicePixelRatio: window.devicePixelRatio,
+                    metaContent: (function() {
+                        var m = document.querySelector('meta[name="viewport"]');
+                        return m ? m.getAttribute('content') : null;
+                    })()
+                },
+                body: {
+                    clientWidth: document.body.clientWidth,
+                    scrollWidth: document.body.scrollWidth,
+                    offsetWidth: document.body.offsetWidth
+                },
+                container: container ? {
+                    clientWidth: container.clientWidth,
+                    scrollWidth: container.scrollWidth,
+                    offsetWidth: container.offsetWidth,
+                    offsetHeight: container.offsetHeight
+                } : null,
+                surface: surface ? {
+                    clientWidth: surface.clientWidth,
+                    scrollWidth: surface.scrollWidth,
+                    offsetWidth: surface.offsetWidth,
+                    offsetHeight: surface.offsetHeight,
+                    style_width: surface.style.width,
+                    style_height: surface.style.height
+                } : null,
+                alphaTab: api ? {
+                    scale: api.settings.display.scale,
+                    width: api.settings.display.width,
+                    barsPerRow: api.settings.display.barsPerRow,
+                    layoutMode: api.settings.display.layoutMode,
+                    staveProfile: api.settings.display.staveProfile
+                } : null,
+                print: {
+                    letterWidthIn: 8.5,
+                    letterHeightIn: 11,
+                    marginIn: 0.5,
+                    printableWidthIn: 7.5,
+                    printableWidthPx_at72dpi: 540,
+                    printableWidthPx_at96dpi: 720,
+                    contentToViewportRatio: container ? (container.scrollWidth / window.innerWidth) : null
+                }
+            };
+            var json = JSON.stringify(info, null, 2);
+            pdfLog('Debug info: ' + json);
+
+            if (showInPage) {
+                var dbg = document.getElementById('pdf-debug');
+                if (dbg) {
+                    dbg.style.display = 'block';
+                    dbg.textContent = json;
+                }
+            }
+            return json;
+        }
+
+        /**
+         * Root cause of "half page width" bug:
+         * Android's print adapter re-renders HTML at the page's CSS pixel width.
+         * For Letter paper: 8.5" × 96 CSS-px/in = 816px (no margins)
+         *                   7.5" × 96 CSS-px/in = 720px (0.5" margins)
+         *
+         * alphaTab renders SVGs at a fixed pixel width (api.settings.display.width).
+         * If we set width=window.innerWidth (~411px on S24), the 411px SVG
+         * sits in a 720px print viewport → fills only 57% → "half the page".
+         *
+         * Fix: hardcode width=720 to match Letter with 0.5" margins at 96dpi.
+         * Also: do NOT override barsPerRow (prevents the "flash" of rearranged bars).
+         */
         function prepareForPrint() {
             if (!api) return;
+            pdfLog('=== prepareForPrint START ===');
+
             // Save current settings
             savedScale = api.settings.display.scale;
             savedWidth = api.settings.display.width;
             savedBarsPerRow = api.settings.display.barsPerRow;
-            // Keep current scale and barsPerRow — only set width to match
-            // letter page printable area: 7.5in × 96dpi = 720px
-            api.settings.display.width = 720;
+            pdfLog('Saved: scale=' + savedScale + ', width=' + savedWidth + ', bars=' + savedBarsPerRow);
+
+            // Dump pre-print dimensions
+            dumpPdfDebugInfo(false);
+
+            // ── KEY FIX: widen the viewport & container so alphaTab actually
+            // renders SVGs at 720px instead of clamping to 360px viewport ──
+            //
+            // Problem: <meta viewport width=device-width> → 360 CSS px on S24
+            //          #alphaTab { width:100% } → 360px container
+            //          alphaTab clamps SVGs to container width → 360px SVGs
+            //          Print adapter puts 360px SVGs on 720px page → half width
+            //
+            // Fix: change viewport to width=720 so container becomes 720px,
+            //      then alphaTab renders 720px SVGs that fill the page.
+            var PRINT_WIDTH = 720;
+            var PRINT_SCALE = 1.0;
+
+            // 1. Save and widen viewport meta tag
+            var viewportMeta = document.querySelector('meta[name="viewport"]');
+            if (viewportMeta) {
+                savedViewportContent = viewportMeta.getAttribute('content');
+                viewportMeta.setAttribute('content', 'width=' + PRINT_WIDTH);
+                pdfLog('Viewport changed to width=' + PRINT_WIDTH + ' (was: ' + savedViewportContent + ')');
+            }
+
+            // 2. Force container & body to print width
+            document.body.style.width = PRINT_WIDTH + 'px';
+            document.body.style.overflow = 'hidden';
+            var container = document.getElementById('alphaTab');
+            if (container) container.style.width = PRINT_WIDTH + 'px';
+
+            // 3. Set alphaTab display settings
+            pdfLog('Setting print: width=' + PRINT_WIDTH + ', scale=' + PRINT_SCALE + ', bars=KEEP(' + savedBarsPerRow + ')');
+            api.settings.display.width = PRINT_WIDTH;
+            api.settings.display.scale = PRINT_SCALE;
+            // DO NOT change barsPerRow — preserve user's layout
             api.updateSettings();
 
             // Listen for render completion to signal print-ready
             printReadyCallback = function() {
+                pdfLog('Render complete — print ready');
+                dumpPdfDebugInfo(false);
                 if (window.Android && typeof window.Android.onPrintReady === 'function') {
                     window.Android.onPrintReady();
                 }
@@ -400,6 +539,23 @@
 
         function restoreAfterPrint() {
             if (!api) return;
+            pdfLog('=== restoreAfterPrint START ===');
+
+            // 1. Restore viewport meta tag
+            var viewportMeta = document.querySelector('meta[name="viewport"]');
+            if (viewportMeta && savedViewportContent) {
+                viewportMeta.setAttribute('content', savedViewportContent);
+                pdfLog('Viewport restored to: ' + savedViewportContent);
+            }
+
+            // 2. Restore container & body widths
+            document.body.style.width = '';
+            document.body.style.overflow = '';
+            var container = document.getElementById('alphaTab');
+            if (container) container.style.width = '100%';
+
+            // 3. Restore alphaTab settings
+            pdfLog('Restoring: scale=' + savedScale + ', width=' + savedWidth + ', bars=' + savedBarsPerRow);
             api.settings.display.scale = savedScale;
             api.settings.display.width = savedWidth;
             api.settings.display.barsPerRow = savedBarsPerRow;

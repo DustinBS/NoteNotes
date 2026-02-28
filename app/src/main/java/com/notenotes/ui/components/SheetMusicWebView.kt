@@ -146,7 +146,13 @@ fun SheetMusicWebView(
                     }
 
                     @JavascriptInterface
+                    fun onPdfLog(message: String) {
+                        Log.i("NNPdf", message)
+                    }
+
+                    @JavascriptInterface
                     fun onPrintReady() {
+                        Log.i("NNPdf", "onPrintReady callback received from JS")
                         post { onPrintReady?.invoke() }
                     }
                 }, "Android")

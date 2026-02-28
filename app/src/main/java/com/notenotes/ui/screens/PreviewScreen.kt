@@ -346,7 +346,11 @@ fun PreviewScreen(
                                     showMenu = false
                                     sheetWebView?.let { wv ->
                                         // Trigger re-render at print-friendly width
+                                        android.util.Log.i("NNPdf", "PDF export triggered: WebView width=${wv.width}px, height=${wv.height}px, scale=${wv.scale}")
                                         printPending = true
+                                        // Hide WebView to prevent the visible "flash" of
+                                        // bars rearranging during print-width re-render
+                                        wv.alpha = 0f
                                         wv.evaluateJavascript("prepareForPrint()", null)
                                     }
                                 },
@@ -643,15 +647,39 @@ fun PreviewScreen(
                             // alphaTab has re-rendered at print width — now print
                             printPending = false
                             sheetWebView?.let { wv ->
+                                android.util.Log.i("NNPdf", "Print ready: WebView width=${wv.width}, height=${wv.height}")
+                                // Capture debug dump and write to file for diagnostics
+                                wv.evaluateJavascript("dumpPdfDebugInfo(false)") { debugJson ->
+                                    android.util.Log.i("NNPdf", "Pre-print debug: $debugJson")
+                                    try {
+                                        val debugFile = java.io.File(
+                                            android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS),
+                                            "NoteNotes_PDF_Debug.txt"
+                                        )
+                                        debugFile.parentFile?.mkdirs()
+                                        debugFile.writeText("PDF Debug Dump - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date())}\n\n$debugJson")
+                                        android.util.Log.i("NNPdf", "Debug file written: ${debugFile.absolutePath}")
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("NNPdf", "Could not write debug file: ${e.message}")
+                                    }
+                                }
                                 val printManager = context.getSystemService(android.content.Context.PRINT_SERVICE) as android.print.PrintManager
                                 val adapter = wv.createPrintDocumentAdapter(idea?.title ?: "Sheet Music")
+                                // 0.5" margins → printable area = 7.5" × 10" → 720 × 960 CSS px at 96dpi
+                                // This MUST match the 720px width set in prepareForPrint()
                                 val attributes = android.print.PrintAttributes.Builder()
                                     .setMediaSize(android.print.PrintAttributes.MediaSize.NA_LETTER)
-                                    .setMinMargins(android.print.PrintAttributes.Margins(500, 500, 500, 500)) // 0.5 inch margins
+                                    .setMinMargins(android.print.PrintAttributes.Margins(500, 500, 500, 500))
                                     .build()
+                                android.util.Log.i("NNPdf", "Printing with Letter size, 0.5in margins (matching alphaTab width=720)")
                                 printManager.print("${idea?.title ?: "NoteNotes"} Sheet Music", adapter, attributes)
                                 // Restore original display settings after a brief delay
-                                wv.postDelayed({ wv.evaluateJavascript("restoreAfterPrint()", null) }, 2000)
+                                // then show the WebView again once the restore render completes
+                                wv.postDelayed({
+                                    wv.evaluateJavascript("restoreAfterPrint()", null)
+                                    // Give alphaTab time to re-render at screen settings before showing
+                                    wv.postDelayed({ wv.alpha = 1f }, 1500)
+                                }, 2000)
                             }
                         }
                     )
