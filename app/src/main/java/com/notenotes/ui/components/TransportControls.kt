@@ -1,6 +1,8 @@
 package com.notenotes.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -8,6 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.notenotes.audio.AudioPlayer
 
 /**
@@ -30,6 +33,9 @@ fun TransportControls(
     onWindowBack: () -> Unit = {},
     onWindowForward: () -> Unit = {},
     onToggleLock: () -> Unit = {},
+    // Speed controls
+    playbackSpeed: Float = 1f,
+    onSpeedChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -46,6 +52,7 @@ fun TransportControls(
                 onValueChange = { newVal ->
                     isSliding = true
                     sliderPosition = newVal
+                    onSeek(newVal) // Update window in real-time while scrubbing
                 },
                 onValueChangeFinished = {
                     onSeek(sliderPosition)
@@ -94,21 +101,35 @@ fun TransportControls(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
+            // Speed buttons
+            val speedOptions = listOf(0.25f, 0.5f, 1f)
+            speedOptions.forEach { speed ->
+                val isSelected = playbackSpeed == speed
+                val label = if (speed == 1f) "1x" else "${speed}x"
+                OutlinedButton(
+                    onClick = { onSpeedChange(speed) },
+                    modifier = Modifier.height(32.dp).defaultMinSize(minWidth = 1.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                    ),
+                    colors = if (isSelected) ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    ) else ButtonDefaults.outlinedButtonColors()
+                ) {
+                    Text(label, fontSize = 11.sp)
+                }
+                Spacer(modifier = Modifier.width(2.dp))
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
+
             // Window back
-            IconButton(onClick = onWindowBack, modifier = Modifier.size(44.dp)) {
-                Icon(Icons.Filled.SkipPrevious, contentDescription = "Window Back", modifier = Modifier.size(24.dp))
+            IconButton(onClick = onWindowBack, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Filled.SkipPrevious, contentDescription = "Window Back", modifier = Modifier.size(22.dp))
             }
-
-            // Stop
-            IconButton(
-                onClick = onStop,
-                enabled = playbackState != AudioPlayer.PlaybackState.IDLE,
-                modifier = Modifier.size(44.dp)
-            ) {
-                Icon(Icons.Filled.Stop, contentDescription = "Stop", modifier = Modifier.size(24.dp))
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
 
             // Play/Pause
             FilledIconButton(
@@ -131,15 +152,13 @@ fun TransportControls(
                 )
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
-
             // Window forward
-            IconButton(onClick = onWindowForward, modifier = Modifier.size(44.dp)) {
-                Icon(Icons.Filled.SkipNext, contentDescription = "Window Forward", modifier = Modifier.size(24.dp))
+            IconButton(onClick = onWindowForward, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Filled.SkipNext, contentDescription = "Window Forward", modifier = Modifier.size(22.dp))
             }
 
             // Lock toggle
-            IconButton(onClick = onToggleLock, modifier = Modifier.size(44.dp)) {
+            IconButton(onClick = onToggleLock, modifier = Modifier.size(40.dp)) {
                 Icon(
                     imageVector = if (isWindowLocked) Icons.Filled.Lock else Icons.Filled.LockOpen,
                     contentDescription = if (isWindowLocked) "Unlock Window" else "Lock Window",

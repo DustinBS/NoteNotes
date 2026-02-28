@@ -16,7 +16,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -36,6 +40,8 @@ fun NoteNameView(
     notes: List<MusicalNote>,
     modifier: Modifier = Modifier,
     tempoBpm: Int = 120,
+    currentNoteIndex: Int = -1,
+    noteProgressFraction: Float = 0f,
     onUpdateNote: ((Int, Int, Int) -> Unit)? = null,  // (index, guitarString, guitarFret)
     onDeleteNote: ((Int) -> Unit)? = null,
     onUpdateChordNote: ((Int, List<Int>, List<Pair<Int, Int>>) -> Unit)? = null  // (index, newChordPitches, newChordStringFrets)
@@ -88,17 +94,93 @@ fun NoteNameView(
             .padding(6.dp)
             .verticalScroll(rememberScrollState())
     ) {
-        // Compact note chips row
+        // Compact note chips row with playback pointer
         val horizontalScroll = rememberScrollState()
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(horizontalScroll),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
+        val density = LocalDensity.current
+        // Track each chip's x-offset and width for pointer positioning
+        val chipPositions = remember { mutableStateMapOf<Int, Pair<Float, Float>>() } // index -> (x, width)
+        val pointerColor = MaterialTheme.colorScheme.primary
+
+        // Auto-scroll chip row to keep the current note visible
+        LaunchedEffect(currentNoteIndex) {
+            if (currentNoteIndex >= 0) {
+                val pos = chipPositions[currentNoteIndex]
+                if (pos != null) {
+                    val chipX = pos.first
+                    val chipW = pos.second
+                    val viewportStart = horizontalScroll.value.toFloat()
+                    val viewportEnd = viewportStart + horizontalScroll.viewportSize
+                    // Scroll if the chip center is outside the visible viewport
+                    val chipCenter = chipX + chipW / 2f
+                    if (chipCenter < viewportStart || chipCenter > viewportEnd) {
+                        horizontalScroll.animateScrollTo((chipX - 40f).toInt().coerceAtLeast(0))
+                    }
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier.fillMaxWidth()
         ) {
-            for (note in notes) {
-                NoteNameChip(note = note, tempoBpm = tempoBpm)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(horizontalScroll),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                notes.forEachIndexed { idx, note ->
+                    Box(
+                        modifier = Modifier
+                            .onGloballyPositioned { coords ->
+                                chipPositions[idx] = Pair(
+                                    coords.positionInParent().x,
+                                    coords.size.width.toFloat()
+                                )
+                            }
+                    ) {
+                        NoteNameChip(
+                            note = note,
+                            tempoBpm = tempoBpm,
+                            isCurrentlyPlaying = idx == currentNoteIndex
+                        )
+                    }
+                }
+            }
+
+            // Draw playback pointer triangle on top of chips
+            if (currentNoteIndex >= 0 && currentNoteIndex in chipPositions) {
+                val pos = chipPositions[currentNoteIndex]!!
+                val chipX = pos.first
+                val chipW = pos.second
+                val pointerX = chipX + chipW * noteProgressFraction.coerceIn(0f, 1f)
+                // Compensate for scroll offset
+                val scrollOffset = horizontalScroll.value.toFloat()
+                val screenX = pointerX - scrollOffset
+
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .drawWithContent {
+                            drawContent()
+                            // Downward-pointing triangle at the top (V shape)
+                            val triSize = 6.dp.toPx()
+                            val path = androidx.compose.ui.graphics.Path().apply {
+                                moveTo(screenX - triSize, 0f)
+                                lineTo(screenX + triSize, 0f)
+                                lineTo(screenX, triSize * 2)
+                                close()
+                            }
+                            drawPath(path, pointerColor)
+                            // Vertical line from triangle to bottom
+                            drawLine(
+                                color = pointerColor,
+                                start = Offset(screenX, triSize * 2),
+                                end = Offset(screenX, size.height),
+                                strokeWidth = 2.dp.toPx()
+                            )
+                        }
+                )
             }
         }
 
@@ -114,6 +196,7 @@ fun NoteNameView(
                 note = note,
                 index = index + 1,
                 beatPosition = beatPosition,
+                isCurrentlyPlaying = index == currentNoteIndex,
                 onClick = if (onUpdateNote != null || onDeleteNote != null) {
                     { editingNoteIndex = index }
                 } else null
@@ -126,7 +209,8 @@ fun NoteNameView(
 @Composable
 private fun NoteNameChip(
     note: MusicalNote,
-    tempoBpm: Int
+    tempoBpm: Int,
+    isCurrentlyPlaying: Boolean = false
 ) {
     val bgColor = when {
         note.isRest -> MaterialTheme.colorScheme.surfaceVariant
@@ -144,13 +228,19 @@ private fun NoteNameChip(
     val durationRatio = note.durationTicks.toFloat() / 4f // relative to quarter note
     val chipWidth = (baseWidth * durationRatio.coerceIn(0.5f, 4f))
 
+    val chipBorder = if (isCurrentlyPlaying) {
+        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp))
+    } else {
+        Modifier.border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+    }
+
     Box(
         modifier = Modifier
             .width(chipWidth)
             .height(56.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(bgColor)
-            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp)),
+            .then(chipBorder),
         contentAlignment = Alignment.Center
     ) {
         if (note.isRest) {
@@ -208,6 +298,7 @@ private fun NoteNameRow(
     note: MusicalNote,
     index: Int,
     beatPosition: Double,
+    isCurrentlyPlaying: Boolean = false,
     onClick: (() -> Unit)? = null
 ) {
     val bgColor = when {
@@ -216,12 +307,19 @@ private fun NoteNameRow(
         else -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
     }
 
+    val rowBorder = if (isCurrentlyPlaying) {
+        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
+    } else {
+        Modifier
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
             .clip(RoundedCornerShape(4.dp))
             .background(bgColor)
+            .then(rowBorder)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically

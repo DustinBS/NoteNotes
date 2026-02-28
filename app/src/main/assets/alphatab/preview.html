@@ -160,6 +160,17 @@
                 document.getElementById('error').style.display = 'none';
                 document.getElementById('alphaTab').style.display = 'block';
 
+                // Validate XML before sending to alphaTab
+                if (!xmlString || xmlString.length === 0) {
+                    showError('Empty MusicXML data received');
+                    return;
+                }
+                var trimmed = xmlString.trim();
+                if (trimmed.indexOf('<?xml') !== 0 && trimmed.indexOf('<score-partwise') !== 0) {
+                    showError('Invalid MusicXML data (length=' + xmlString.length + ', starts: ' + xmlString.substring(0, 40) + ')');
+                    return;
+                }
+
                 // Convert string to ArrayBuffer for alphaTab's load method
                 var encoder = new TextEncoder();
                 var data = encoder.encode(xmlString);

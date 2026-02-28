@@ -149,6 +149,22 @@ class AudioPlayer {
     }
 
     /**
+     * Set playback speed (e.g. 0.25, 0.5, 1.0).
+     * Requires API 23+ (Android 6.0+), which is above our minSdk 26.
+     */
+    fun setPlaybackSpeed(speed: Float) {
+        mediaPlayer?.let {
+            try {
+                val params = it.playbackParams.setSpeed(speed)
+                it.playbackParams = params
+                Log.d(TAG, "AudioPlayer: Speed set to ${speed}x")
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioPlayer: Failed to set speed", e)
+            }
+        }
+    }
+
+    /**
      * Release all resources. Call when the player is no longer needed.
      */
     fun release() {

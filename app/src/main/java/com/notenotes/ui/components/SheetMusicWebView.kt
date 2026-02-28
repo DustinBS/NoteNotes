@@ -167,6 +167,13 @@ fun SheetMusicWebView(
  * Load MusicXML into the WebView via JavaScript.
  */
 private fun loadMusicXml(webView: WebView, musicXml: String) {
+    // Validate XML before sending
+    val trimmed = musicXml.trim()
+    if (trimmed.isEmpty() || !(trimmed.startsWith("<?xml") || trimmed.startsWith("<score-partwise"))) {
+        Log.w("SheetMusic", "loadMusicXml: Skipping invalid XML (length=${musicXml.length}, starts=${musicXml.take(40)})")
+        return
+    }
+
     // Escape the XML for JavaScript string literal
     val escaped = musicXml
         .replace("\\", "\\\\")

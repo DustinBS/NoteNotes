@@ -61,6 +61,7 @@ fun PreviewScreen(
     val windowSizeSec by viewModel.windowSizeSec.collectAsState()
     val isWindowLocked by viewModel.isWindowLocked.collectAsState()
     val isRenameDialogOpen by viewModel.isRenameDialogOpen.collectAsState()
+    val playbackSpeed by viewModel.playbackSpeed.collectAsState()
 
     // Tab state from ViewModel (persists across navigation)
     val selectedTab by viewModel.selectedTab.collectAsState()
@@ -617,57 +618,69 @@ fun PreviewScreen(
             }
 
             // Content based on selected tab
-            when (selectedTab) {
-                0 -> {
-                    // Sheet music display
-                    val currentNoteIndex = remember(playbackProgress, notesList) {
-                        viewModel.getCurrentNoteIndex(playbackProgress)
-                    }
-                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        if (musicXml != null) {
-                            SheetMusicWebView(
-                                musicXml = musicXml,
-                                modifier = Modifier.fillMaxSize(),
-                                playbackProgress = playbackProgress,
-                                currentNoteIndex = currentNoteIndex,
-                                isPlaying = playbackState == AudioPlayer.PlaybackState.PLAYING,
-                                barsPerRow = sheetBarsPerRow,
-                                scale = sheetScale,
-                                onWebViewReady = { sheetWebView = it },
-                                onError = { viewModel.setError(it) },
-                                onPrintReady = {
-                                    // alphaTab has re-rendered at print width — now print
-                                    printPending = false
-                                    sheetWebView?.let { wv ->
-                                        val printManager = context.getSystemService(android.content.Context.PRINT_SERVICE) as android.print.PrintManager
-                                        val adapter = wv.createPrintDocumentAdapter(idea?.title ?: "Sheet Music")
-                                        val attributes = android.print.PrintAttributes.Builder()
-                                            .setMediaSize(android.print.PrintAttributes.MediaSize.NA_LETTER)
-                                            .setMinMargins(android.print.PrintAttributes.Margins(500, 500, 500, 500)) // 0.5 inch margins
-                                            .build()
-                                        printManager.print("${idea?.title ?: "NoteNotes"} Sheet Music", adapter, attributes)
-                                        // Restore original display settings after a brief delay
-                                        wv.postDelayed({ wv.evaluateJavascript("restoreAfterPrint()", null) }, 2000)
-                                    }
-                                }
-                            )
-                        } else {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CircularProgressIndicator()
+            // Always render SheetMusicWebView so PDF export works from any tab
+            val sheetCurrentNoteIndex = remember(playbackProgress, notesList) {
+                viewModel.getCurrentNoteIndex(playbackProgress)
+            }
+            Box(
+                modifier = Modifier
+                    .weight(if (selectedTab == 0) 1f else 0.001f)
+                    .fillMaxWidth()
+                    .then(if (selectedTab != 0) Modifier.height(0.dp) else Modifier)
+            ) {
+                if (musicXml != null) {
+                    SheetMusicWebView(
+                        musicXml = musicXml,
+                        modifier = Modifier.fillMaxSize(),
+                        playbackProgress = playbackProgress,
+                        currentNoteIndex = sheetCurrentNoteIndex,
+                        isPlaying = playbackState == AudioPlayer.PlaybackState.PLAYING,
+                        barsPerRow = sheetBarsPerRow,
+                        scale = sheetScale,
+                        onWebViewReady = { sheetWebView = it },
+                        onError = { viewModel.setError(it) },
+                        onPrintReady = {
+                            // alphaTab has re-rendered at print width — now print
+                            printPending = false
+                            sheetWebView?.let { wv ->
+                                val printManager = context.getSystemService(android.content.Context.PRINT_SERVICE) as android.print.PrintManager
+                                val adapter = wv.createPrintDocumentAdapter(idea?.title ?: "Sheet Music")
+                                val attributes = android.print.PrintAttributes.Builder()
+                                    .setMediaSize(android.print.PrintAttributes.MediaSize.NA_LETTER)
+                                    .setMinMargins(android.print.PrintAttributes.Margins(500, 500, 500, 500)) // 0.5 inch margins
+                                    .build()
+                                printManager.print("${idea?.title ?: "NoteNotes"} Sheet Music", adapter, attributes)
+                                // Restore original display settings after a brief delay
+                                wv.postDelayed({ wv.evaluateJavascript("restoreAfterPrint()", null) }, 2000)
                             }
                         }
+                    )
+                } else if (selectedTab == 0) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
                     }
                 }
+            }
+
+            when (selectedTab) {
                 1 -> {
                     // Note name view (editable)
+                    val notesCurrentNoteIndex = remember(playbackProgress, notesList) {
+                        viewModel.getCurrentNoteIndex(playbackProgress)
+                    }
+                    val notesNoteProgress = remember(playbackProgress, notesList) {
+                        viewModel.getPlaybackFractionInNote(playbackProgress)
+                    }
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         NoteNameView(
                             notes = notesList,
                             modifier = Modifier.fillMaxSize(),
                             tempoBpm = idea?.tempoBpm ?: 120,
+                            currentNoteIndex = notesCurrentNoteIndex,
+                            noteProgressFraction = notesNoteProgress,
                             onUpdateNote = { index, guitarString, guitarFret ->
                                 viewModel.updateNoteAt(index, guitarString, guitarFret)
                             },
@@ -748,6 +761,8 @@ fun PreviewScreen(
                 onWindowBack = { viewModel.moveWindow(-1f) },
                 onWindowForward = { viewModel.moveWindow(1f) },
                 onToggleLock = { viewModel.toggleWindowLock() },
+                playbackSpeed = playbackSpeed,
+                onSpeedChange = { speed -> viewModel.setPlaybackSpeed(speed) },
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
             )
         }

@@ -122,32 +122,15 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 Log.d(TAG, "loadIdea: Found '${melodyIdea.title}', audio=${melodyIdea.audioFilePath}, xml=${melodyIdea.musicXmlFilePath}")
                 _idea.value = melodyIdea
 
-                // Load or regenerate MusicXML
-                val xmlFile = melodyIdea.musicXmlFilePath?.let { File(it) }
-                if (xmlFile != null && xmlFile.exists()) {
-                    Log.d(TAG, "loadIdea: Loading MusicXML from file (${xmlFile.length()} bytes)")
-                    _musicXml.value = xmlFile.readText()
-                    // Also parse notes for note name view
-                    if (melodyIdea.notes != null) {
-                        try {
-                            val notesType = object : TypeToken<List<MusicalNote>>() {}.type
-                            val notes: List<MusicalNote> = MusicalNote.sanitizeList(
-                                gson.fromJson(melodyIdea.notes, notesType)
-                            )
-                            _notesList.value = notes
-                        } catch (e: Exception) {
-                            Log.w(TAG, "loadIdea: Could not parse notes JSON for note name view", e)
-                        }
-                    }
-                } else if (melodyIdea.notes != null) {
+                // Always regenerate MusicXML from stored notes (avoids stale/corrupt files on disk)
+                if (melodyIdea.notes != null) {
                     Log.d(TAG, "loadIdea: Regenerating MusicXML from stored notes...")
-                    // Rebuild from stored notes
                     val notesType = object : TypeToken<List<MusicalNote>>() {}.type
                     val notes: List<MusicalNote> = MusicalNote.sanitizeList(
                         gson.fromJson(melodyIdea.notes, notesType)
                     )
                     Log.d(TAG, "loadIdea: Parsed ${notes.size} notes from JSON")
-                    
+
                     val keySig = parseKeySignature(melodyIdea.keySignature)
                     val timeSig = parseTimeSignature(melodyIdea.timeSignature)
                     val instrument = InstrumentProfile.ALL.find { it.name == melodyIdea.instrument }
@@ -164,7 +147,19 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     _notesList.value = notes
                     Log.d(TAG, "loadIdea: MusicXML regenerated successfully")
                 } else {
-                    Log.w(TAG, "loadIdea: No XML file and no stored notes!")
+                    // Fallback: try loading from saved file (no notes in DB)
+                    val xmlFile = melodyIdea.musicXmlFilePath?.let { File(it) }
+                    if (xmlFile != null && xmlFile.exists() && xmlFile.length() > 0) {
+                        val content = xmlFile.readText()
+                        if (content.trimStart().startsWith("<?xml") || content.trimStart().startsWith("<score-partwise")) {
+                            Log.d(TAG, "loadIdea: Loading MusicXML from file (${xmlFile.length()} bytes)")
+                            _musicXml.value = content
+                        } else {
+                            Log.w(TAG, "loadIdea: File exists but doesn't look like valid MusicXML")
+                        }
+                    } else {
+                        Log.w(TAG, "loadIdea: No stored notes and no valid XML file!")
+                    }
                 }
 
                 // Load waveform data from audio file
@@ -193,6 +188,10 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
             if (preScrubPosition > 0.01f) {
                 audioPlayer.seekTo(preScrubPosition)
             }
+            // Apply current speed setting (new MediaPlayer starts at 1x)
+            if (_playbackSpeed.value != 1f) {
+                audioPlayer.setPlaybackSpeed(_playbackSpeed.value)
+            }
         } else {
             Log.e(TAG, "playVoiceMemo: Audio file not found: $audioPath")
             _errorMessage.value = "Audio file not found"
@@ -202,6 +201,15 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     fun pausePlayback() = audioPlayer.pause()
     fun resumePlayback() = audioPlayer.resume()
     fun stopPlayback() = audioPlayer.stop()
+
+    // Playback speed
+    private val _playbackSpeed = MutableStateFlow(1f)
+    val playbackSpeed: StateFlow<Float> = _playbackSpeed
+
+    fun setPlaybackSpeed(speed: Float) {
+        _playbackSpeed.value = speed
+        audioPlayer.setPlaybackSpeed(speed)
+    }
 
     fun setError(message: String) {
         _errorMessage.value = message
@@ -504,6 +512,39 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
             cumulativeMs = noteStartMs + noteDurationMs
         }
         Log.w(TAG, "splitNoteAtCursor: No splittable note found at cursor position")
+    }
+
+    /**
+     * Get 0..1 fraction indicating how far through the current note playback is.
+     */
+    fun getPlaybackFractionInNote(progress: Float): Float {
+        val durationMs = _audioDurationMs.value
+        if (durationMs <= 0) return 0f
+        val currentTimeMs = progress * durationMs
+        val tempoBpm = _idea.value?.tempoBpm ?: 120
+        val beatDurationMs = 60000f / tempoBpm
+        val tickDurationMs = beatDurationMs / 4f
+        var cumulativeMs = 0f
+        val notes = _notesList.value
+        if (notes.isEmpty()) return 0f
+
+        for (note in notes) {
+            val noteStartMs = if (note.isManual && note.timePositionMs != null) {
+                note.timePositionMs
+            } else {
+                cumulativeMs
+            }
+            val noteDurationMs = note.durationTicks * tickDurationMs
+            val noteEndMs = noteStartMs + noteDurationMs
+
+            if (currentTimeMs < noteEndMs) {
+                return if (noteDurationMs > 0) {
+                    ((currentTimeMs - noteStartMs) / noteDurationMs).coerceIn(0f, 1f)
+                } else 0f
+            }
+            cumulativeMs = noteStartMs + noteDurationMs
+        }
+        return 1f
     }
 
     /**
