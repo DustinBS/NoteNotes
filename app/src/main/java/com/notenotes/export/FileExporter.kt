@@ -11,10 +11,11 @@ import java.io.File
  * Handles exporting and sharing of MIDI and MusicXML files.
  * Uses Android FileProvider for secure file sharing.
  */
-class FileExporter(private val context: Context) {
-
-    private val midiWriter = MidiWriter()
-    private val musicXmlGenerator = MusicXmlGenerator()
+class FileExporter(
+    private val context: Context,
+    private val midiWriter: MidiWriter = MidiWriter(),
+    private val musicXmlGenerator: MusicXmlGenerator = MusicXmlGenerator()
+) {
 
     /**
      * Export transcription to MIDI file.

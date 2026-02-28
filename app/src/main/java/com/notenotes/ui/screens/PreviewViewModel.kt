@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.notenotes.audio.AudioPlayer
+import com.notenotes.audio.WavReader
 import com.notenotes.audio.WavWriter
 import com.notenotes.data.AppDatabase
 import com.notenotes.export.FileExporter
@@ -21,6 +22,7 @@ import com.notenotes.model.TimeSignature
 import com.notenotes.processing.PitchAlgorithm
 import com.notenotes.processing.TranscriptionPipeline
 import com.notenotes.ui.components.WaveformData
+import com.notenotes.util.NoteTimingHelper
 import com.notenotes.util.TranspositionUtils
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -29,9 +31,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.File
-import java.io.RandomAccessFile
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import android.os.Environment
 
 private const val TAG = "NNPreview"
@@ -41,9 +40,9 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     private val context = application.applicationContext
     private val dao = AppDatabase.getDatabase(context).melodyDao()
     private val audioPlayer = AudioPlayer()
-    private val fileExporter = FileExporter(context)
     private val midiWriter = MidiWriter()
     private val musicXmlGenerator = MusicXmlGenerator()
+    private val fileExporter = FileExporter(context, midiWriter, musicXmlGenerator)
     private val gson = Gson()
 
     private val _idea = MutableStateFlow<MelodyIdea?>(null)
@@ -367,8 +366,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     private fun recalculateNoteDurations(notes: List<MusicalNote>, tempoBpm: Int, durationMs: Int): List<MusicalNote> {
         if (notes.isEmpty()) return notes
 
-        val beatDurationMs = 60000f / tempoBpm
-        val tickDurationMs = beatDurationMs / 4f // divisions=4
+        val tickDurationMs = NoteTimingHelper.tickDurationMs(tempoBpm)
 
         // Compute time positions for all notes
         data class TimedNote(val note: MusicalNote, val timeMs: Float)
@@ -377,11 +375,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         var cumulativeMs = 0f
         
         for (note in notes) {
-            val timeMs = if (note.isManual && note.timePositionMs != null) {
-                note.timePositionMs
-            } else {
-                cumulativeMs
-            }
+            val timeMs = NoteTimingHelper.computeNoteStartMs(note, cumulativeMs)
             timedNotes.add(TimedNote(note, timeMs))
             cumulativeMs = timeMs + note.durationTicks * tickDurationMs
         }
@@ -410,13 +404,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     /**
      * Map tick count to closest note type name.
      */
-    private fun ticksToType(ticks: Int): String = when {
-        ticks >= 16 -> "whole"
-        ticks >= 8  -> "half"
-        ticks >= 4  -> "quarter"
-        ticks >= 2  -> "eighth"
-        else        -> "16th"
-    }
+    private fun ticksToType(ticks: Int): String = NoteTimingHelper.ticksToType(ticks)
 
     /**
      * Update a note at a specific index with new guitar tab data.
@@ -466,17 +454,12 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val tempoBpm = _idea.value?.tempoBpm ?: 120
 
         // Find the note that contains the cursor
-        val beatDurationMs = 60000f / tempoBpm
-        val tickDurationMs = beatDurationMs / 4f
+        val tickDurationMs = NoteTimingHelper.tickDurationMs(tempoBpm)
         var cumulativeMs = 0f
 
         for (i in currentNotes.indices) {
             val note = currentNotes[i]
-            val noteStartMs = if (note.isManual && note.timePositionMs != null) {
-                note.timePositionMs
-            } else {
-                cumulativeMs
-            }
+            val noteStartMs = NoteTimingHelper.computeNoteStartMs(note, cumulativeMs)
             val noteDurationMs = note.durationTicks * tickDurationMs
             val noteEndMs = noteStartMs + noteDurationMs
 
@@ -522,29 +505,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         if (durationMs <= 0) return 0f
         val currentTimeMs = progress * durationMs
         val tempoBpm = _idea.value?.tempoBpm ?: 120
-        val beatDurationMs = 60000f / tempoBpm
-        val tickDurationMs = beatDurationMs / 4f
-        var cumulativeMs = 0f
-        val notes = _notesList.value
-        if (notes.isEmpty()) return 0f
-
-        for (note in notes) {
-            val noteStartMs = if (note.isManual && note.timePositionMs != null) {
-                note.timePositionMs
-            } else {
-                cumulativeMs
-            }
-            val noteDurationMs = note.durationTicks * tickDurationMs
-            val noteEndMs = noteStartMs + noteDurationMs
-
-            if (currentTimeMs < noteEndMs) {
-                return if (noteDurationMs > 0) {
-                    ((currentTimeMs - noteStartMs) / noteDurationMs).coerceIn(0f, 1f)
-                } else 0f
-            }
-            cumulativeMs = noteStartMs + noteDurationMs
-        }
-        return 1f
+        return NoteTimingHelper.getPlaybackFractionInNote(_notesList.value, currentTimeMs, tempoBpm)
     }
 
     /**
@@ -556,27 +517,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         if (durationMs <= 0) return 0
         val currentTimeMs = progress * durationMs
         val tempoBpm = _idea.value?.tempoBpm ?: 120
-        val beatDurationMs = 60000f / tempoBpm
-        val tickDurationMs = beatDurationMs / 4f
-        var cumulativeMs = 0f
-        val notes = _notesList.value
-        if (notes.isEmpty()) return 0
-
-        for ((index, note) in notes.withIndex()) {
-            val noteStartMs = if (note.isManual && note.timePositionMs != null) {
-                note.timePositionMs
-            } else {
-                cumulativeMs
-            }
-            val noteDurationMs = note.durationTicks * tickDurationMs
-            val noteEndMs = noteStartMs + noteDurationMs
-
-            if (currentTimeMs < noteEndMs) {
-                return index
-            }
-            cumulativeMs = noteStartMs + noteDurationMs
-        }
-        return notes.size - 1 // Past all notes, return last
+        return NoteTimingHelper.getCurrentNoteIndex(_notesList.value, currentTimeMs, tempoBpm)
     }
 
     /**
@@ -588,25 +529,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         if (durationMs <= 0) return false
         val cursorTimeMs = cursorFrac * durationMs
         val tempoBpm = _idea.value?.tempoBpm ?: 120
-        val beatDurationMs = 60000f / tempoBpm
-        val tickDurationMs = beatDurationMs / 4f
-        var cumulativeMs = 0f
-
-        for (note in _notesList.value) {
-            val noteStartMs = if (note.isManual && note.timePositionMs != null) {
-                note.timePositionMs
-            } else {
-                cumulativeMs
-            }
-            val noteDurationMs = note.durationTicks * tickDurationMs
-            val noteEndMs = noteStartMs + noteDurationMs
-
-            if (cursorTimeMs >= noteStartMs && cursorTimeMs <= noteEndMs) {
-                return true
-            }
-            cumulativeMs = noteStartMs + noteDurationMs
-        }
-        return false
+        return NoteTimingHelper.isCursorInsideNote(_notesList.value, cursorTimeMs, tempoBpm)
     }
 
     /**
@@ -736,13 +659,21 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /** Debounce job for coalescing rapid edits into a single disk write. */
+    private var saveJob: kotlinx.coroutines.Job? = null
+
     /**
      * After adding or deleting notes, refresh all derived state (MusicXML, exports, DB).
+     * Debounces disk writes — rapid edits within 300ms are coalesced.
      */
     private fun updateNotesAndRefresh(notes: List<MusicalNote>) {
         _notesList.value = notes
 
-        viewModelScope.launch(Dispatchers.IO) {
+        // Cancel any pending save — the latest edit wins
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch(Dispatchers.IO) {
+            // Brief debounce so rapid successive edits don't each trigger disk I/O
+            kotlinx.coroutines.delay(300)
             try {
                 val melodyIdea = _idea.value ?: return@launch
                 val keySig = parseKeySignature(melodyIdea.keySignature)
@@ -918,31 +849,9 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
      * Read PCM samples from a WAV file.
      */
     private fun readWavSamples(file: File): ShortArray? {
-        try {
-            val raf = RandomAccessFile(file, "r")
-            raf.seek(12) // skip RIFF header
-            while (raf.filePointer < raf.length() - 8) {
-                val chunkId = ByteArray(4)
-                raf.readFully(chunkId)
-                val sizeBytes = ByteArray(4)
-                raf.readFully(sizeBytes)
-                val chunkSize = ByteBuffer.wrap(sizeBytes).order(ByteOrder.LITTLE_ENDIAN).getInt()
-
-                if (String(chunkId) == "data") {
-                    val dataBytes = ByteArray(chunkSize)
-                    raf.readFully(dataBytes)
-                    raf.close()
-                    val bb = ByteBuffer.wrap(dataBytes).order(ByteOrder.LITTLE_ENDIAN)
-                    return ShortArray(chunkSize / 2) { bb.getShort() }
-                } else {
-                    raf.seek(raf.filePointer + chunkSize.toLong())
-                }
-            }
-            raf.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "readWavSamples: Error", e)
-        }
-        return null
+        val result = WavReader.readSamples(file)
+        if (result == null) Log.e(TAG, "readWavSamples: Failed to read ${file.name}")
+        return result
     }
 
     private fun buildResult(): TranscriptionResult? {
@@ -970,61 +879,14 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
      * Load waveform data from a WAV file for visualization.
      */
     private fun loadWaveformData(file: File) {
-        if (!file.exists()) {
-            Log.w(TAG, "loadWaveformData: File not found: ${file.absolutePath}")
+        val wavData = WavReader.readFull(file)
+        if (wavData == null) {
+            Log.w(TAG, "loadWaveformData: Could not read ${file.absolutePath}")
             return
         }
-        try {
-            val raf = RandomAccessFile(file, "r")
-            // Read WAV header
-            val header = ByteArray(44)
-            raf.readFully(header)
-            val bb = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
-
-            // RIFF header
-            bb.position(0)
-            val riff = ByteArray(4); bb.get(riff)
-            if (String(riff) != "RIFF") {
-                Log.w(TAG, "loadWaveformData: Not a RIFF file")
-                raf.close()
-                return
-            }
-            bb.getInt() // fileSize
-            val wave = ByteArray(4); bb.get(wave)
-
-            // Skip to data chunk
-            bb.position(16)
-            val fmtSize = bb.getInt()
-            bb.position(20 + fmtSize) // Skip fmt chunk
-            
-            // Find actual data chunk position
-            raf.seek(20 + fmtSize.toLong())
-            while (raf.filePointer < raf.length() - 8) {
-                val chunkId = ByteArray(4)
-                raf.readFully(chunkId)
-                val chunkSizeBytes = ByteArray(4)
-                raf.readFully(chunkSizeBytes)
-                val chunkSize = ByteBuffer.wrap(chunkSizeBytes).order(ByteOrder.LITTLE_ENDIAN).getInt()
-                
-                if (String(chunkId) == "data") {
-                    val numSamples = chunkSize / 2
-                    val dataBytes = ByteArray(chunkSize)
-                    raf.readFully(dataBytes)
-                    val dataBB = ByteBuffer.wrap(dataBytes).order(ByteOrder.LITTLE_ENDIAN)
-                    val samples = ShortArray(numSamples) { dataBB.getShort() }
-                    
-                    _waveformData.value = WaveformData.fromSamples(samples, 44100, 2000)
-                    _audioDurationMs.value = (numSamples * 1000 / 44100)
-                    Log.d(TAG, "loadWaveformData: Loaded $numSamples samples, ${_audioDurationMs.value}ms")
-                    break
-                } else {
-                    raf.seek(raf.filePointer + chunkSize.toLong())
-                }
-            }
-            raf.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "loadWaveformData: Error reading WAV", e)
-        }
+        _waveformData.value = WaveformData.fromSamples(wavData.samples, wavData.sampleRate, 2000)
+        _audioDurationMs.value = wavData.durationMs
+        Log.d(TAG, "loadWaveformData: Loaded ${wavData.samples.size} samples, ${wavData.durationMs}ms")
     }
 
     private fun parseKeySignature(str: String?): KeySignature {

@@ -665,21 +665,21 @@ fun PreviewScreen(
                                 }
                                 val printManager = context.getSystemService(android.content.Context.PRINT_SERVICE) as android.print.PrintManager
                                 val adapter = wv.createPrintDocumentAdapter(idea?.title ?: "Sheet Music")
-                                // 0.5" margins → printable area = 7.5" × 10" → 720 × 960 CSS px at 96dpi
-                                // This MUST match the 720px width set in prepareForPrint()
+                                // Margins and width from PdfConstants — single source of truth
+                                val m = com.notenotes.export.PdfConstants.MARGIN_MILS
                                 val attributes = android.print.PrintAttributes.Builder()
                                     .setMediaSize(android.print.PrintAttributes.MediaSize.NA_LETTER)
-                                    .setMinMargins(android.print.PrintAttributes.Margins(500, 500, 500, 500))
+                                    .setMinMargins(android.print.PrintAttributes.Margins(m, m, m, m))
                                     .build()
-                                android.util.Log.i("NNPdf", "Printing with Letter size, 0.5in margins (matching alphaTab width=720)")
+                                android.util.Log.i("NNPdf", "Printing with Letter size, margins=${m}mils (width=${com.notenotes.export.PdfConstants.PRINT_WIDTH_PX}px)")
                                 printManager.print("${idea?.title ?: "NoteNotes"} Sheet Music", adapter, attributes)
                                 // Restore original display settings after a brief delay
                                 // then show the WebView again once the restore render completes
                                 wv.postDelayed({
                                     wv.evaluateJavascript("restoreAfterPrint()", null)
                                     // Give alphaTab time to re-render at screen settings before showing
-                                    wv.postDelayed({ wv.alpha = 1f }, 1500)
-                                }, 2000)
+                                    wv.postDelayed({ wv.alpha = 1f }, com.notenotes.export.PdfConstants.WEBVIEW_SHOW_DELAY_MS)
+                                }, com.notenotes.export.PdfConstants.RESTORE_RENDER_DELAY_MS)
                             }
                         }
                     )
