@@ -34,6 +34,17 @@
             padding: 16px;
             text-align: center;
         }
+        @media print {
+            body {
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            #alphaTab {
+                width: 100% !important;
+                transform: none !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -71,7 +82,7 @@
                     },
                     player: {
                         enablePlayer: false,
-                        enableCursor: false,
+                        enableCursor: true,
                         enableUserInteraction: false
                     }
                 });
@@ -83,6 +94,12 @@
                 api.renderFinished.on(function() {
                     if (window.Android) {
                         window.Android.onRenderComplete();
+                    }
+                    // If waiting for print-ready, fire callback
+                    if (printReadyCallback) {
+                        var cb = printReadyCallback;
+                        printReadyCallback = null;
+                        cb();
                     }
                 });
 
@@ -152,25 +169,162 @@
             }
         }
 
-        // Show/hide cursor (kept for API compatibility with SheetMusicWebView)
+        // Show/hide cursor
+        function ensureCursorElements() {
+            if (document.querySelector('.at-cursor-bar')) return true;
+            // alphaTab doesn't create cursor elements when enablePlayer=false.
+            // Find the alphaTab rendering surface and create them manually.
+            var surface = document.querySelector('.at-surface');
+            if (!surface) return false;
+
+            var wrapper = document.createElement('div');
+            wrapper.classList.add('at-cursors');
+            wrapper.style.position = 'absolute';
+            wrapper.style.zIndex = '1000';
+            wrapper.style.pointerEvents = 'none';
+            wrapper.style.top = '0';
+            wrapper.style.left = '0';
+            wrapper.style.width = '100%';
+            wrapper.style.height = '100%';
+
+            // Ensure surface is positioned for absolute children
+            if (getComputedStyle(surface).position === 'static') {
+                surface.style.position = 'relative';
+            }
+
+            var barCursor = document.createElement('div');
+            barCursor.classList.add('at-cursor-bar');
+            barCursor.style.position = 'absolute';
+            barCursor.style.background = 'rgba(255, 242, 0, 0.25)';
+            barCursor.style.display = 'none';
+            wrapper.appendChild(barCursor);
+
+            var beatCursor = document.createElement('div');
+            beatCursor.classList.add('at-cursor-beat');
+            beatCursor.style.position = 'absolute';
+            beatCursor.style.background = 'rgba(64, 64, 255, 0.75)';
+            beatCursor.style.width = '3px';
+            beatCursor.style.display = 'none';
+            wrapper.appendChild(beatCursor);
+
+            surface.insertBefore(wrapper, surface.firstChild);
+            return true;
+        }
+
         function showCursor() {
-            // alphaTab cursor is disabled; no-op
+            if (!api) return;
+            try {
+                if (!ensureCursorElements()) return;
+                var bar = document.querySelector('.at-cursor-bar');
+                var beat = document.querySelector('.at-cursor-beat');
+                if (bar) bar.style.display = 'block';
+                if (beat) beat.style.display = 'block';
+            } catch(e) {}
         }
 
         function hideCursor() {
-            // no-op
+            try {
+                var bar = document.querySelector('.at-cursor-bar');
+                var beat = document.querySelector('.at-cursor-beat');
+                if (bar) bar.style.display = 'none';
+                if (beat) beat.style.display = 'none';
+            } catch(e) {}
         }
 
         function resetCursor() {
-            // no-op
+            hideCursor();
         }
 
         function nextCursor() {
-            // no-op
+            // Not used with fraction-based approach
         }
 
         function setCursorToFraction(fraction) {
-            // alphaTab cursor is disabled; no-op
+            // Legacy — kept for compatibility but setCursorToNoteIndex is preferred
+            setCursorToNoteIndex(-1); // no-op fallback
+        }
+
+        /**
+         * Position the cursor on the idx-th note (beat) in the score.
+         * Walks voice-0 beats in order, skipping tie-destination beats
+         * (which are continuations of notes split across bar lines).
+         */
+        function setCursorToNoteIndex(idx) {
+            if (!api || idx < 0) return;
+            try {
+                var bounds = api.renderer.boundsLookup;
+                if (!bounds) return;
+
+                var score = api.score;
+                if (!score) return;
+
+                var track = score.tracks[0];
+                if (!track) return;
+                var staff = track.staves[0];
+                if (!staff) return;
+
+                // Walk voice-0 beats, counting only non-tie-destination beats
+                var count = 0;
+                var foundBeat = null;
+                for (var b = 0; b < staff.bars.length; b++) {
+                    var bar = staff.bars[b];
+                    if (bar.voices.length === 0) continue;
+                    var voice = bar.voices[0];
+                    for (var i = 0; i < voice.beats.length; i++) {
+                        var beat = voice.beats[i];
+                        // Skip tie-destination beats (note split across bar line)
+                        var isTieDest = false;
+                        if (beat.notes && beat.notes.length > 0) {
+                            for (var n = 0; n < beat.notes.length; n++) {
+                                if (beat.notes[n].isTieDestination) {
+                                    isTieDest = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (isTieDest) continue;
+
+                        if (count === idx) {
+                            foundBeat = beat;
+                            break;
+                        }
+                        count++;
+                    }
+                    if (foundBeat) break;
+                }
+
+                if (!foundBeat) return;
+
+                // Get visual bounds for this beat
+                var beatBounds = bounds.findBeat(foundBeat);
+                if (!beatBounds || !beatBounds.visualBounds) return;
+
+                if (!ensureCursorElements()) return;
+
+                var barCursor = document.querySelector('.at-cursor-bar');
+                var beatCursor = document.querySelector('.at-cursor-beat');
+
+                // Position the bar highlight using the master bar bounds
+                if (barCursor && beatBounds.barBounds && beatBounds.barBounds.masterBarBounds) {
+                    var mb = beatBounds.barBounds.masterBarBounds;
+                    barCursor.style.display = 'block';
+                    barCursor.style.top = mb.visualBounds.y + 'px';
+                    barCursor.style.left = mb.visualBounds.x + 'px';
+                    barCursor.style.width = mb.visualBounds.w + 'px';
+                    barCursor.style.height = mb.visualBounds.h + 'px';
+                }
+
+                // Position the beat cursor line
+                if (beatCursor) {
+                    beatCursor.style.display = 'block';
+                    beatCursor.style.top = beatBounds.visualBounds.y + 'px';
+                    beatCursor.style.left = beatBounds.visualBounds.x + 'px';
+                    beatCursor.style.width = '3px';
+                    beatCursor.style.height = beatBounds.visualBounds.h + 'px';
+                }
+            } catch(e) {
+                // Non-fatal cursor positioning error
+            }
         }
 
         function showError(message) {
@@ -205,6 +359,41 @@
                 api.updateSettings();
                 api.render();
             }
+        }
+
+        // Prepare for PDF printing: re-render at print-friendly width
+        var printReadyCallback = null;
+        var savedScale = 0.9;
+        var savedWidth = -1;
+        var savedBarsPerRow = -1;
+
+        function prepareForPrint() {
+            if (!api) return;
+            // Save current settings
+            savedScale = api.settings.display.scale;
+            savedWidth = api.settings.display.width;
+            savedBarsPerRow = api.settings.display.barsPerRow;
+            // Keep current scale and barsPerRow — only set width to match
+            // letter page printable area: 7.5in × 96dpi = 720px
+            api.settings.display.width = 720;
+            api.updateSettings();
+
+            // Listen for render completion to signal print-ready
+            printReadyCallback = function() {
+                if (window.Android && typeof window.Android.onPrintReady === 'function') {
+                    window.Android.onPrintReady();
+                }
+            };
+            api.render();
+        }
+
+        function restoreAfterPrint() {
+            if (!api) return;
+            api.settings.display.scale = savedScale;
+            api.settings.display.width = savedWidth;
+            api.settings.display.barsPerRow = savedBarsPerRow;
+            api.updateSettings();
+            api.render();
         }
 
         // Initialize when page loads

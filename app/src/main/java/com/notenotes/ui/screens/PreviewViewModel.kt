@@ -102,6 +102,12 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     private val _isRenameDialogOpen = MutableStateFlow(false)
     val isRenameDialogOpen: StateFlow<Boolean> = _isRenameDialogOpen
 
+    // Tab state (persists across navigation)
+    private val _selectedTab = MutableStateFlow(2)  // 0=Sheet, 1=Notes, 2=Waveform
+    val selectedTab: StateFlow<Int> = _selectedTab
+
+    fun setSelectedTab(tab: Int) { _selectedTab.value = tab }
+
     private var currentResult: TranscriptionResult? = null
 
     fun loadIdea(ideaId: Long) {
@@ -434,7 +440,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         currentNotes[index] = oldNote.copy(
             chordPitches = filtered.map { it.first },
             chordStringFrets = filtered.map { it.second },
-            chordName = if (filtered.isEmpty()) null else oldNote.chordName
+            chordName = if (filtered.isEmpty()) null else (oldNote.chordName ?: "Chord")
         )
         updateNotesAndRefresh(currentNotes)
         Log.i(TAG, "updateChordPitches: Updated chord at $index, pitches=${filtered.map { it.first }}")
@@ -498,6 +504,38 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
             cumulativeMs = noteStartMs + noteDurationMs
         }
         Log.w(TAG, "splitNoteAtCursor: No splittable note found at cursor position")
+    }
+
+    /**
+     * Compute which note index is currently playing at the given playback progress.
+     * Uses the same time-mapping logic as the notes tab so cursor walks perfectly in sync.
+     */
+    fun getCurrentNoteIndex(progress: Float): Int {
+        val durationMs = _audioDurationMs.value
+        if (durationMs <= 0) return 0
+        val currentTimeMs = progress * durationMs
+        val tempoBpm = _idea.value?.tempoBpm ?: 120
+        val beatDurationMs = 60000f / tempoBpm
+        val tickDurationMs = beatDurationMs / 4f
+        var cumulativeMs = 0f
+        val notes = _notesList.value
+        if (notes.isEmpty()) return 0
+
+        for ((index, note) in notes.withIndex()) {
+            val noteStartMs = if (note.isManual && note.timePositionMs != null) {
+                note.timePositionMs
+            } else {
+                cumulativeMs
+            }
+            val noteDurationMs = note.durationTicks * tickDurationMs
+            val noteEndMs = noteStartMs + noteDurationMs
+
+            if (currentTimeMs < noteEndMs) {
+                return index
+            }
+            cumulativeMs = noteStartMs + noteDurationMs
+        }
+        return notes.size - 1 // Past all notes, return last
     }
 
     /**

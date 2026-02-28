@@ -21,13 +21,15 @@ fun SheetMusicWebView(
     musicXml: String?,
     modifier: Modifier = Modifier,
     playbackProgress: Float = 0f,
+    currentNoteIndex: Int = -1,
     isPlaying: Boolean = false,
     barsPerRow: Int = -1,
     scale: Float = 0.9f,
     onWebViewReady: ((WebView) -> Unit)? = null,
     onReady: () -> Unit = {},
     onRenderComplete: () -> Unit = {},
-    onError: (String) -> Unit = {}
+    onError: (String) -> Unit = {},
+    onPrintReady: (() -> Unit)? = null
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     var isOsmdReady by remember { mutableStateOf(false) }
@@ -81,15 +83,15 @@ fun SheetMusicWebView(
         }
     }
 
-    // Update cursor position based on playback progress — throttled to ~10 Hz
+    // Update cursor position based on note index — throttled to ~10 Hz
     var lastCursorUpdate by remember { mutableStateOf(0L) }
-    LaunchedEffect(playbackProgress) {
+    LaunchedEffect(currentNoteIndex, isPlaying) {
         val wv = webView ?: return@LaunchedEffect
-        if (isPlaying || cursorShown) {
+        if ((isPlaying || cursorShown) && currentNoteIndex >= 0) {
             val now = System.currentTimeMillis()
             if (now - lastCursorUpdate >= 100) {  // max 10 updates per second
                 lastCursorUpdate = now
-                wv.evaluateJavascript("setCursorToFraction($playbackProgress)", null)
+                wv.evaluateJavascript("setCursorToNoteIndex($currentNoteIndex)", null)
             }
         }
     }
@@ -141,6 +143,11 @@ fun SheetMusicWebView(
                     @JavascriptInterface
                     fun onError(message: String) {
                         post { onError(message) }
+                    }
+
+                    @JavascriptInterface
+                    fun onPrintReady() {
+                        post { onPrintReady?.invoke() }
                     }
                 }, "Android")
 

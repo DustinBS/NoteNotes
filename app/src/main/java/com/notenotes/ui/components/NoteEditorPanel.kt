@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -59,18 +60,16 @@ fun NoteEditorPanel(
 ) {
     var selectedStringIndex by remember { mutableIntStateOf(selectedNote?.guitarString ?: 0) }
     var selectedFret by remember { mutableIntStateOf(selectedNote?.guitarFret ?: 0) }
-    val chordNotes = remember { mutableStateListOf<EditorNote>() }
 
     // Which chord note is being edited: -1 = primary, 0..n = chord pitch index, null = not editing chord
     var editingChordNoteIndex by remember { mutableIntStateOf(-1) }
 
-    // Sync when a different note is selected
-    LaunchedEffect(selectedNote) {
-        if (selectedNote != null) {
-            selectedStringIndex = selectedNote.guitarString ?: 0
-            selectedFret = selectedNote.guitarFret ?: 0
-            editingChordNoteIndex = -1  // Reset to primary
-        }
+    // Sync when a DIFFERENT note is selected (not when the same note's data changes)
+    LaunchedEffect(selectedNoteIndex) {
+        val note = selectedNote ?: return@LaunchedEffect
+        selectedStringIndex = note.guitarString ?: 0
+        selectedFret = note.guitarFret ?: 0
+        editingChordNoteIndex = -1  // Reset to primary
     }
 
     // Real-time update when string/fret changes for an existing selected note
@@ -125,6 +124,8 @@ fun NoteEditorPanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = 360.dp)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
             // Selected note info display
@@ -214,33 +215,11 @@ fun NoteEditorPanel(
                                 }
                             }
 
-                            // Add note to chord button
+                            // Chord management buttons
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                OutlinedButton(
-                                    onClick = {
-                                        if (selectedNoteIndex == null) return@OutlinedButton
-                                        // Find unused string
-                                        val usedStrings = allChordNotes.map { it.stringIdx }.toSet()
-                                        val unusedString = (0..5).firstOrNull { it !in usedStrings } ?: 0
-                                        val newMidi = GuitarUtils.toMidi(unusedString, 0)
-                                        val newPitches = allChordNotes.map { it.pitch } + newMidi
-                                        val newStringFrets = allChordNotes.map { Pair(it.stringIdx, it.fret) } + Pair(unusedString, 0)
-                                        onUpdateChordNote?.invoke(selectedNoteIndex, newPitches, newStringFrets)
-                                        // Switch to editing new note
-                                        editingChordNoteIndex = allChordNotes.size
-                                        selectedStringIndex = unusedString
-                                        selectedFret = 0
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.height(28.dp)
-                                ) {
-                                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(2.dp))
-                                    Text("Add Note", fontSize = 10.sp)
-                                }
                                 if (allChordNotes.size > 1 && editingChordNoteIndex >= 0) {
                                     OutlinedButton(
                                         onClick = {
@@ -426,96 +405,60 @@ fun NoteEditorPanel(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Chord notes area
-            if (chordNotes.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text("Chord:", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.CenterVertically))
-                    chordNotes.forEach { note ->
-                        val noteName = PitchUtils.midiToNoteName(note.midiPitch)
-                        InputChip(
-                            selected = false,
-                            onClick = { chordNotes.remove(note) },
-                            label = { Text("$noteName - MIDI ${note.midiPitch}", fontSize = 10.sp) },
-                            trailingIcon = {
-                                Icon(Icons.Filled.Close, contentDescription = "Remove", modifier = Modifier.size(12.dp))
-                            }
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-
-            // Same-string conflict warning
-            if (chordNotes.isNotEmpty()) {
-                val allStringsUsed = chordNotes.map { it.stringIndex }
-                val hasDuplicateStrings = allStringsUsed.size != allStringsUsed.toSet().size
-                val currentStringConflict = chordNotes.any { it.stringIndex == selectedStringIndex }
-
-                if (hasDuplicateStrings) {
-                    Text(
-                        text = "\u26A0 Warning: Multiple notes on the same string!",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
-                    )
-                } else if (currentStringConflict) {
-                    Text(
-                        text = "\u26A0 String ${GuitarUtils.STRINGS[selectedStringIndex].label} already used in chord",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
-                    )
-                }
-            }
-
             // Action buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // Add to chord
-                OutlinedButton(
-                    onClick = {
-                        val note = EditorNote(selectedStringIndex, selectedFret)
-                        if (chordNotes.none { it.midiPitch == note.midiPitch }) {
-                            chordNotes.add(note)
-                        }
-                    },
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(2.dp))
-                    Text("Chord", fontSize = 12.sp)
-                }
-
-                // Add note / chord
-                Button(
-                    onClick = {
-                        val allNotes = if (chordNotes.isEmpty()) {
-                            listOf(EditorNote(selectedStringIndex, selectedFret))
-                        } else {
-                            chordNotes.toList()
-                        }
-                        val pairs = allNotes.map { Pair(it.midiPitch, Pair(it.stringIndex, it.fret)) }
-                        onAddNote(pairs)
-                        chordNotes.clear()
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = editCursorActive,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(2.dp))
-                    Text(
-                        if (chordNotes.size > 1) "Add Chord" else "Add Note",
-                        fontSize = 12.sp
-                    )
+                if (hasSelectedNote && selectedNote != null && selectedNoteIndex != null) {
+                    // "Add Note" — adds a new pitch to the selected note, making it a chord
+                    Button(
+                        onClick = {
+                            val primaryString = selectedNote.guitarString ?: 0
+                            val primaryFret = selectedNote.guitarFret ?: 0
+                            val safeChordSF = selectedNote.safeChordStringFrets
+                            // Build current full pitch list
+                            val fullPitches = mutableListOf(selectedNote.midiPitch)
+                            val fullStringFrets = mutableListOf(Pair(primaryString, primaryFret))
+                            for (i in selectedNote.chordPitches.indices) {
+                                fullPitches.add(selectedNote.chordPitches[i])
+                                fullStringFrets.add(if (i < safeChordSF.size) safeChordSF[i] else Pair(0, 0))
+                            }
+                            // Find an unused string for the new note
+                            val usedStrings = fullStringFrets.map { it.first }.toMutableSet()
+                            val unusedString = (0..5).firstOrNull { it !in usedStrings } ?: 0
+                            val newMidi = GuitarUtils.toMidi(unusedString, 0)
+                            fullPitches.add(newMidi)
+                            fullStringFrets.add(Pair(unusedString, 0))
+                            onUpdateChordNote?.invoke(selectedNoteIndex, fullPitches, fullStringFrets)
+                            // Switch to editing the newly added note
+                            editingChordNoteIndex = fullPitches.size - 1
+                            selectedStringIndex = unusedString
+                            selectedFret = 0
+                        },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text("Add Note", fontSize = 12.sp)
+                    }
+                } else {
+                    // "Place Note" — places a new single note at cursor position
+                    Button(
+                        onClick = {
+                            val note = EditorNote(selectedStringIndex, selectedFret)
+                            val pairs = listOf(Pair(note.midiPitch, Pair(note.stringIndex, note.fret)))
+                            onAddNote(pairs)
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = editCursorActive,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text("Place Note", fontSize = 12.sp)
+                    }
                 }
 
                 // Delete selected

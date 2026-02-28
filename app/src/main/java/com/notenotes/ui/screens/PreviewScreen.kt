@@ -1,6 +1,6 @@
 package com.notenotes.ui.screens
 
-import android.content.Intent
+import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -13,7 +13,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -28,6 +27,11 @@ import com.notenotes.ui.components.NoteEditorPanel
 import com.notenotes.processing.PitchAlgorithm
 import com.notenotes.model.KeySignature
 import com.notenotes.model.TimeSignature
+
+private const val PREFS_NAME = "notenotes_display"
+private const val KEY_BARS_PER_ROW = "bars_per_row"
+private const val KEY_SCALE = "sheet_scale"
+private const val KEY_WINDOW_SIZE = "window_size_sec"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,11 +50,40 @@ fun PreviewScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val waveformData by viewModel.waveformData.collectAsState()
     val audioDurationMs by viewModel.audioDurationMs.collectAsState()
-    
+
     val isRetranscribing by viewModel.isRetranscribing.collectAsState()
-    
-    // Tab state: 0 = Sheet Music, 1 = Note Names, 2 = Waveform
-    var selectedTab by remember { mutableIntStateOf(0) }
+    val selectedNoteIndex by viewModel.selectedNoteIndex.collectAsState()
+    val editCursorFraction by viewModel.editCursorFraction.collectAsState()
+    val isEditorOpen by viewModel.isEditorOpen.collectAsState()
+
+    // Window state
+    val windowStartFraction by viewModel.windowStartFraction.collectAsState()
+    val windowSizeSec by viewModel.windowSizeSec.collectAsState()
+    val isWindowLocked by viewModel.isWindowLocked.collectAsState()
+    val isRenameDialogOpen by viewModel.isRenameDialogOpen.collectAsState()
+
+    // Tab state from ViewModel (persists across navigation)
+    val selectedTab by viewModel.selectedTab.collectAsState()
+
+    // Display settings from SharedPreferences (persisted per user)
+    val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    var sheetBarsPerRow by remember { mutableIntStateOf(prefs.getInt(KEY_BARS_PER_ROW, -1)) }
+    var sheetScale by remember { mutableFloatStateOf(prefs.getFloat(KEY_SCALE, 0.9f)) }
+    var sheetWebView by remember { mutableStateOf<android.webkit.WebView?>(null) }
+    // PDF print pending state: when true, we're waiting for alphaTab to re-render at print width
+    var printPending by remember { mutableStateOf(false) }
+
+    // Persist window size from prefs on first load
+    LaunchedEffect(Unit) {
+        val savedWindowSize = prefs.getFloat(KEY_WINDOW_SIZE, 5f)
+        viewModel.setWindowSizeSec(savedWindowSize)
+    }
+
+    // Dialog state
+    var showClearDialog by remember { mutableStateOf(false) }
+    var showKeyDialog by remember { mutableStateOf(false) }
+    var showTimeDialog by remember { mutableStateOf(false) }
+    var showBpmDialog by remember { mutableStateOf(false) }
 
     // Load idea on first composition
     LaunchedEffect(ideaId) {
@@ -252,14 +285,10 @@ fun PreviewScreen(
         )
     }
 
-    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
-
     Scaffold(
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
                 title = {
-                    // Tappable title for rename
                     Text(
                         text = idea?.title ?: "Preview",
                         modifier = Modifier.clickable { viewModel.openRenameDialog() }
@@ -270,7 +299,6 @@ fun PreviewScreen(
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
-                scrollBehavior = scrollBehavior,
                 actions = {
                     var showMenu by remember { mutableStateOf(false) }
                     var selectedAlgorithm by remember { mutableStateOf(PitchAlgorithm.DEFAULT) }
@@ -302,15 +330,154 @@ fun PreviewScreen(
                                 leadingIcon = { Icon(Icons.Filled.Description, contentDescription = null) }
                             )
                             DropdownMenuItem(
-                                text = { Text("Share Audio") },
-                                onClick = {
-                                    showExportMenu = false
-                                    viewModel.shareAudio(context)
-                                },
+                                text = { Text("Audio") },
+                                onClick = { showMenu = false; viewModel.shareAudio(context) },
                                 leadingIcon = { Icon(Icons.Filled.GraphicEq, contentDescription = null) }
                             )
                             DropdownMenuItem(
-                                text = { Text("Share All") },
+                                text = { Text("All Files") },
+                                onClick = { showMenu = false; viewModel.shareAll(context) },
+                                leadingIcon = { Icon(Icons.Filled.FolderOpen, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("PDF (Sheet Music)") },
+                                onClick = {
+                                    showMenu = false
+                                    sheetWebView?.let { wv ->
+                                        // Trigger re-render at print-friendly width
+                                        printPending = true
+                                        wv.evaluateJavascript("prepareForPrint()", null)
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Filled.PictureAsPdf, contentDescription = null) },
+                                enabled = sheetWebView != null && !printPending
+                            )
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                            // ── Display ──
+                            Text(
+                                "Display",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                            // Window size control
+                            DropdownMenuItem(
+                                text = {
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        var windowText by remember(windowSizeSec) {
+                                            mutableStateOf(String.format("%.0f", windowSizeSec))
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("Window", style = MaterialTheme.typography.bodySmall)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            OutlinedTextField(
+                                                value = windowText,
+                                                onValueChange = { newVal ->
+                                                    windowText = newVal.filter { c -> c.isDigit() || c == '.' }
+                                                },
+                                                keyboardOptions = KeyboardOptions(
+                                                    keyboardType = KeyboardType.Number,
+                                                    imeAction = ImeAction.Done
+                                                ),
+                                                keyboardActions = KeyboardActions(
+                                                    onDone = {
+                                                        windowText.toFloatOrNull()?.let { v ->
+                                                            viewModel.setWindowSizeSec(v)
+                                                            prefs.edit().putFloat(KEY_WINDOW_SIZE, v).apply()
+                                                        }
+                                                    }
+                                                ),
+                                                singleLine = true,
+                                                textStyle = MaterialTheme.typography.bodySmall,
+                                                modifier = Modifier.width(72.dp).height(48.dp),
+                                                suffix = { Text("s", style = MaterialTheme.typography.labelSmall) }
+                                            )
+                                        }
+                                        Slider(
+                                            value = windowSizeSec,
+                                            onValueChange = {
+                                                viewModel.setWindowSizeSec(it)
+                                                prefs.edit().putFloat(KEY_WINDOW_SIZE, it).apply()
+                                            },
+                                            valueRange = 1f..30f,
+                                            steps = 28
+                                        )
+                                    }
+                                },
+                                onClick = {},
+                                enabled = true,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            )
+                            // Bars per row control
+                            DropdownMenuItem(
+                                text = {
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("Bars/Row", style = MaterialTheme.typography.bodySmall)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                if (sheetBarsPerRow == -1) "Auto" else "$sheetBarsPerRow",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        Slider(
+                                            value = sheetBarsPerRow.toFloat(),
+                                            onValueChange = {
+                                                sheetBarsPerRow = it.toInt()
+                                                prefs.edit().putInt(KEY_BARS_PER_ROW, it.toInt()).apply()
+                                            },
+                                            valueRange = -1f..8f,
+                                            steps = 8
+                                        )
+                                    }
+                                },
+                                onClick = {},
+                                enabled = true,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            )
+                            // Scale control
+                            DropdownMenuItem(
+                                text = {
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("Scale", style = MaterialTheme.typography.bodySmall)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                String.format("%.1fx", sheetScale),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        Slider(
+                                            value = sheetScale,
+                                            onValueChange = {
+                                                sheetScale = ((it * 10).toInt() / 10f)
+                                                prefs.edit().putFloat(KEY_SCALE, sheetScale).apply()
+                                            },
+                                            valueRange = 0.5f..2.0f,
+                                            steps = 14
+                                        )
+                                    }
+                                },
+                                onClick = {},
+                                enabled = true,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            )
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                            // ── Recording ──
+                            Text(
+                                "Recording",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Settings") },
                                 onClick = {
                                     showMenu = false
                                     onNavigateToSettings?.invoke()
@@ -431,19 +598,19 @@ fun PreviewScreen(
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(
                     selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
+                    onClick = { viewModel.setSelectedTab(0) },
                     text = { Text("Sheet") },
                     icon = { Icon(Icons.Filled.MusicNote, contentDescription = null, modifier = Modifier.size(18.dp)) }
                 )
                 Tab(
                     selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
+                    onClick = { viewModel.setSelectedTab(1) },
                     text = { Text("Notes") },
                     icon = { Icon(Icons.Filled.TextFields, contentDescription = null, modifier = Modifier.size(18.dp)) }
                 )
                 Tab(
                     selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
+                    onClick = { viewModel.setSelectedTab(2) },
                     text = { Text("Waveform") },
                     icon = { Icon(Icons.Filled.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp)) }
                 )
@@ -452,18 +619,37 @@ fun PreviewScreen(
             // Content based on selected tab
             when (selectedTab) {
                 0 -> {
-                    // Synchronized score + tablature display via OSMD dual-staff MusicXML
+                    // Sheet music display
+                    val currentNoteIndex = remember(playbackProgress, notesList) {
+                        viewModel.getCurrentNoteIndex(playbackProgress)
+                    }
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         if (musicXml != null) {
                             SheetMusicWebView(
                                 musicXml = musicXml,
                                 modifier = Modifier.fillMaxSize(),
                                 playbackProgress = playbackProgress,
+                                currentNoteIndex = currentNoteIndex,
                                 isPlaying = playbackState == AudioPlayer.PlaybackState.PLAYING,
                                 barsPerRow = sheetBarsPerRow,
                                 scale = sheetScale,
                                 onWebViewReady = { sheetWebView = it },
-                                onError = { viewModel.setError(it) }
+                                onError = { viewModel.setError(it) },
+                                onPrintReady = {
+                                    // alphaTab has re-rendered at print width — now print
+                                    printPending = false
+                                    sheetWebView?.let { wv ->
+                                        val printManager = context.getSystemService(android.content.Context.PRINT_SERVICE) as android.print.PrintManager
+                                        val adapter = wv.createPrintDocumentAdapter(idea?.title ?: "Sheet Music")
+                                        val attributes = android.print.PrintAttributes.Builder()
+                                            .setMediaSize(android.print.PrintAttributes.MediaSize.NA_LETTER)
+                                            .setMinMargins(android.print.PrintAttributes.Margins(500, 500, 500, 500)) // 0.5 inch margins
+                                            .build()
+                                        printManager.print("${idea?.title ?: "NoteNotes"} Sheet Music", adapter, attributes)
+                                        // Restore original display settings after a brief delay
+                                        wv.postDelayed({ wv.evaluateJavascript("restoreAfterPrint()", null) }, 2000)
+                                    }
+                                }
                             )
                         } else {
                             Box(
@@ -496,30 +682,57 @@ fun PreviewScreen(
                     }
                 }
                 2 -> {
-                    // DAW-style: waveform (fixed height) + always-visible editor below
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        // Waveform view — windowed
+                    // Waveform tab with editor
+                    Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        // Waveform view
                         WaveformView(
                             waveformData = waveformData,
                             notes = notesList,
                             playbackProgress = playbackProgress,
                             durationMs = audioDurationMs,
                             tempoBpm = idea?.tempoBpm ?: 120,
-                            onSeek = { fraction -> viewModel.seekTo(fraction) },
-                            modifier = Modifier.fillMaxSize()
+                            onSeek = { fraction -> viewModel.seekAudioOnly(fraction) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            selectedNoteIndex = selectedNoteIndex,
+                            editCursorFraction = editCursorFraction,
+                            onNoteSelected = { idx -> viewModel.selectNote(idx) },
+                            onEditCursorSet = { frac -> viewModel.setEditCursor(frac) },
+                            windowStartFraction = windowStartFraction,
+                            windowSizeSec = windowSizeSec
+                        )
+
+                        // Always-visible note editor
+                        NoteEditorPanel(
+                            editCursorActive = editCursorFraction != null,
+                            timePointSeconds = (editCursorFraction ?: 0f) * audioDurationMs / 1000f,
+                            onAddNote = { editorNotes ->
+                                viewModel.addNote(editorNotes)
+                            },
+                            onDeleteSelected = if (selectedNoteIndex != null) {
+                                { viewModel.deleteSelectedNote() }
+                            } else null,
+                            onClearAll = { showClearDialog = true },
+                            hasSelectedNote = selectedNoteIndex != null,
+                            selectedNote = viewModel.selectedNote,
+                            selectedNoteIndex = selectedNoteIndex,
+                            canSplitAtCursor = viewModel.isCursorInsideNote(),
+                            onSplitAtCursor = { viewModel.splitNoteAtCursor() },
+                            onUpdateNote = { index, guitarString, guitarFret ->
+                                viewModel.updateNoteAt(index, guitarString, guitarFret)
+                            },
+                            onUpdateChordNote = { index, pitches, stringFrets ->
+                                viewModel.updateChordPitches(index, pitches, stringFrets)
+                            }
                         )
                     }
                 }
             }
 
-            Divider()
+            HorizontalDivider()
 
-            // Playback controls with progress bar
+            // Transport controls
             TransportControls(
                 playbackState = playbackState,
                 onPlay = { viewModel.playVoiceMemo() },
@@ -537,9 +750,6 @@ fun PreviewScreen(
                 onToggleLock = { viewModel.toggleWindowLock() },
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
             )
-
         }
     }
 }
-
-

@@ -61,7 +61,6 @@ fun GuitarTabView(
     val lineColor = if (forceLightMode) Color(0xFF999999) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
     val fretTextColor = if (forceLightMode) Color(0xFF1565C0) else MaterialTheme.colorScheme.primary
     val labelColor = if (forceLightMode) Color(0xFF666666) else MaterialTheme.colorScheme.onSurfaceVariant
-    val manualHighlight = if (forceLightMode) Color(0x66B2DFDB) else MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.4f)
     val timeColor = if (forceLightMode) Color(0x80999999) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
     val bgColor = if (forceLightMode) Color.White else MaterialTheme.colorScheme.surface
 
@@ -194,15 +193,6 @@ fun GuitarTabView(
             for (tabNote in tabNotes) {
                 val x = tabNote.timeSec * pixelsPerSecond
                 val y = topMargin + tabNote.displayLine * lineSpacing
-
-                // Manual note highlight
-                if (tabNote.isManual) {
-                    drawCircle(
-                        color = manualHighlight,
-                        radius = 10f,
-                        center = Offset(x, y)
-                    )
-                }
 
                 // Draw white background behind fret number for readability
                 drawCircle(
