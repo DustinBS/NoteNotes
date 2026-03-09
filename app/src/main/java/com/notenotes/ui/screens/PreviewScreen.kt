@@ -393,6 +393,11 @@ fun PreviewScreen(
                                 leadingIcon = { Icon(Icons.Filled.Description, contentDescription = null) }
                             )
                             DropdownMenuItem(
+                                text = { Text("Transcription (.nnt)") },
+                                onClick = { showMenu = false; viewModel.shareNnt(context) },
+                                leadingIcon = { Icon(Icons.Filled.LibraryMusic, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Audio") },
                                 onClick = { showMenu = false; viewModel.shareAudio(context) },
                                 leadingIcon = { Icon(Icons.Filled.GraphicEq, contentDescription = null) }

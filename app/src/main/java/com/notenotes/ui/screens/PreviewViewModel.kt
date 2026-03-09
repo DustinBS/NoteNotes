@@ -15,9 +15,11 @@ import com.notenotes.export.FileExporter
 import com.notenotes.export.MidiWriter
 import com.notenotes.export.MusicXmlGenerator
 import com.notenotes.export.MusicXmlSanitizer
+import com.notenotes.export.NntFile
 import com.notenotes.model.InstrumentProfile
 import com.notenotes.model.MelodyIdea
 import com.notenotes.model.MusicalNote
+import com.notenotes.model.NntTranscription
 import com.notenotes.model.TranscriptionResult
 import com.notenotes.model.KeySignature
 import com.notenotes.model.TimeSignature
@@ -297,11 +299,19 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         context.startActivity(Intent.createChooser(intent, "Share MusicXML"))
     }
 
+    fun shareNnt(context: Context) {
+        val nnt = buildNntTranscription() ?: return
+        val title = _idea.value?.title ?: "melody"
+        val intent = fileExporter.shareNnt(nnt, title)
+        context.startActivity(Intent.createChooser(intent, "Share Transcription"))
+    }
+
     fun shareAll(context: Context) {
         val result = buildResult() ?: return
         val title = _idea.value?.title ?: "melody"
         val audioFile = _idea.value?.audioFilePath?.let { File(it) }
-        val intent = fileExporter.shareAll(result, title, audioFile)
+        val nnt = buildNntTranscription()
+        val intent = fileExporter.shareAll(result, title, audioFile, nnt)
         context.startActivity(Intent.createChooser(intent, "Share Files"))
     }
 
@@ -361,6 +371,14 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     )
                     zos.putNextEntry(ZipEntry("melody.musicxml"))
                     zos.write(xml.toByteArray())
+                    zos.closeEntry()
+                }
+
+                // NNT transcription (full-fidelity notes)
+                val nnt = buildNntTranscription()
+                if (nnt != null) {
+                    zos.putNextEntry(ZipEntry("melody.${NntTranscription.FILE_EXTENSION}"))
+                    zos.write(NntFile.toJson(nnt).toByteArray())
                     zos.closeEntry()
                 }
             }
@@ -802,6 +820,16 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
+                // Save NNT transcription (full-fidelity notes)
+                val nnt = buildNntTranscription()
+                if (nnt != null) {
+                    val dest = File(downloadsDir, "$title.${NntTranscription.FILE_EXTENSION}")
+                    NntFile.write(nnt, dest)
+                    savedPaths.add(dest.absolutePath)
+                    savedMimes.add(NntTranscription.MIME_TYPE)
+                    savedCount++
+                }
+
                 // Scan saved files so they appear in the SAF file picker immediately
                 if (savedPaths.isNotEmpty()) {
                     android.media.MediaScannerConnection.scanFile(
@@ -1182,6 +1210,21 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         )
         currentResult = result
         return result
+    }
+
+    /**
+     * Build an [NntTranscription] from the current idea's notes + metadata.
+     */
+    private fun buildNntTranscription(): NntTranscription? {
+        val melodyIdea = _idea.value ?: return null
+        val notesJson = melodyIdea.notes ?: return null
+        return NntFile.fromNotesJson(
+            notesJson = notesJson,
+            instrument = melodyIdea.instrument,
+            tempoBpm = melodyIdea.tempoBpm,
+            keySignature = melodyIdea.keySignature,
+            timeSignature = melodyIdea.timeSignature
+        )
     }
 
     /**

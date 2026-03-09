@@ -43,7 +43,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.notenotes.data.AppDatabase
+import com.notenotes.export.NntFile
 import com.notenotes.model.MelodyIdea
+import com.notenotes.model.NntTranscription
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -391,6 +393,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
                 var newAudioPath = idea.audioFilePath
                 var newXmlPath = idea.musicXmlFilePath
+                var newNotes = idea.notes
+                var newInstrument = idea.instrument
+                var newTempo = idea.tempoBpm
+                var newKey = idea.keySignature
+                var newTime = idea.timeSignature
 
                 if (audioUri != null) {
                     val name = getDisplayName(context, audioUri)
@@ -403,19 +410,42 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 if (xmlUri != null) {
-                    val dest = java.io.File(audioDir, "replace_${ts}.musicxml")
-                    context.contentResolver.openInputStream(xmlUri)?.use { input ->
-                        dest.outputStream().use { output -> input.copyTo(output) }
+                    val name = getDisplayName(context, xmlUri)
+                    val ext = name.substringAfterLast('.', "").lowercase()
+
+                    if (ext == NntTranscription.FILE_EXTENSION) {
+                        // NNT file — apply notes + metadata directly
+                        val nnt = context.contentResolver.openInputStream(xmlUri)?.use { input ->
+                            NntFile.read(input)
+                        }
+                        if (nnt != null) {
+                            val gson = com.google.gson.Gson()
+                            newNotes = gson.toJson(nnt.notes)
+                            newInstrument = nnt.instrument
+                            newTempo = nnt.tempoBpm
+                            newKey = nnt.keySignature
+                            newTime = nnt.timeSignature
+                            // No XML file needed — notes are stored directly
+                        }
+                    } else {
+                        // MusicXML file — copy and clear notes so loadIdea() parses it
+                        val dest = java.io.File(audioDir, "replace_${ts}.musicxml")
+                        context.contentResolver.openInputStream(xmlUri)?.use { input ->
+                            dest.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        newXmlPath = dest.absolutePath
+                        newNotes = null  // force re-parse from XML on next load
                     }
-                    newXmlPath = dest.absolutePath
                 }
 
                 val updated = idea.copy(
                     audioFilePath = newAudioPath,
                     musicXmlFilePath = newXmlPath,
-                    // Clear stored notes when XML is replaced so loadIdea()
-                    // uses the new XML file instead of stale JSON notes
-                    notes = if (xmlUri != null) null else idea.notes
+                    notes = newNotes,
+                    instrument = newInstrument,
+                    tempoBpm = newTempo,
+                    keySignature = newKey,
+                    timeSignature = newTime
                 )
                 dao.update(updated)
             } catch (e: Exception) {
@@ -427,7 +457,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /** Build a new idea from user-provided audio (required) and optional XML file. */
+    /** Build a new idea from user-provided audio (required) and optional transcription file. */
     fun buildIdea(context: Context, audioUri: Uri, xmlUri: Uri?, onDone: (Long) -> Unit) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
@@ -445,19 +475,49 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 val title = audioName.substringAfterLast(':').substringBeforeLast('.')
 
                 var xmlPath: String? = null
+                var notes: String? = null
+                var instrument = "piano"
+                var tempoBpm = 120
+                var keySignature: String? = null
+                var timeSignature: String? = null
+
                 if (xmlUri != null) {
-                    val xmlDest = java.io.File(audioDir, "build_${ts}.musicxml")
-                    context.contentResolver.openInputStream(xmlUri)?.use { input ->
-                        xmlDest.outputStream().use { output -> input.copyTo(output) }
+                    val xmlName = getDisplayName(context, xmlUri)
+                    val xmlExt = xmlName.substringAfterLast('.', "").lowercase()
+
+                    if (xmlExt == NntTranscription.FILE_EXTENSION) {
+                        // NNT file — apply notes + metadata directly
+                        val nnt = context.contentResolver.openInputStream(xmlUri)?.use { input ->
+                            NntFile.read(input)
+                        }
+                        if (nnt != null) {
+                            val gson = com.google.gson.Gson()
+                            notes = gson.toJson(nnt.notes)
+                            instrument = nnt.instrument
+                            tempoBpm = nnt.tempoBpm
+                            keySignature = nnt.keySignature
+                            timeSignature = nnt.timeSignature
+                        }
+                    } else {
+                        // MusicXML file — copy so loadIdea() can parse it
+                        val xmlDest = java.io.File(audioDir, "build_${ts}.musicxml")
+                        context.contentResolver.openInputStream(xmlUri)?.use { input ->
+                            xmlDest.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        xmlPath = xmlDest.absolutePath
                     }
-                    xmlPath = xmlDest.absolutePath
                 }
 
                 val idea = MelodyIdea(
                     title = title,
                     createdAt = ts,
                     audioFilePath = audioDest.absolutePath,
-                    musicXmlFilePath = xmlPath
+                    musicXmlFilePath = xmlPath,
+                    notes = notes,
+                    instrument = instrument,
+                    tempoBpm = tempoBpm,
+                    keySignature = keySignature,
+                    timeSignature = timeSignature
                 )
                 val newId = dao.insert(idea)
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
@@ -492,6 +552,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 var audioPath: String? = null
                 var xmlPath: String? = null
                 var midiPath: String? = null
+                var nntNotes: String? = null
+                var nntInstrument: String? = null
+                var nntTempo: Int? = null
+                var nntKey: String? = null
+                var nntTime: String? = null
                 var title = "Imported Idea"
 
                 for (uri in uris) {
@@ -524,10 +589,25 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                             midiPath = dest.absolutePath
                             if (title == "Imported Idea") title = cleanName.substringBeforeLast('.')
                         }
+                        NntTranscription.FILE_EXTENSION -> {
+                            // NNT transcription — parse notes + metadata directly
+                            val nnt = context.contentResolver.openInputStream(uri)?.use { input ->
+                                NntFile.read(input)
+                            }
+                            if (nnt != null) {
+                                val gson = com.google.gson.Gson()
+                                nntNotes = gson.toJson(nnt.notes)
+                                nntInstrument = nnt.instrument
+                                nntTempo = nnt.tempoBpm
+                                nntKey = nnt.keySignature
+                                nntTime = nnt.timeSignature
+                            }
+                            if (title == "Imported Idea") title = cleanName.substringBeforeLast('.')
+                        }
                     }
                 }
 
-                if (audioPath == null && xmlPath == null && midiPath == null) return@launch
+                if (audioPath == null && xmlPath == null && midiPath == null && nntNotes == null) return@launch
 
                 // If no audio file, create a placeholder path
                 val finalAudioPath = audioPath ?: java.io.File(audioDir, "import_${ts}_placeholder.wav").also {
@@ -539,7 +619,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                     createdAt = ts,
                     audioFilePath = finalAudioPath,
                     musicXmlFilePath = xmlPath,
-                    midiFilePath = midiPath
+                    midiFilePath = midiPath,
+                    notes = nntNotes,
+                    instrument = nntInstrument ?: "piano",
+                    tempoBpm = nntTempo ?: 120,
+                    keySignature = nntKey,
+                    timeSignature = nntTime
                 )
                 val newId = dao.insert(idea)
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
@@ -591,6 +676,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                             val dest = java.io.File(audioDir, "import_${ts}.$ext")
                             dest.outputStream().use { out -> zis.copyTo(out) }
                             audioPath = dest.absolutePath
+                        }
+                        entryName.endsWith(".${NntTranscription.FILE_EXTENSION}") -> {
+                            // NNT transcription in ZIP — notes will be applied from
+                            // metadata.json which already has the full notes JSON
+                            // (this entry exists for standalone extraction)
                         }
                         entryName.endsWith(".musicxml") -> {
                             val dest = java.io.File(audioDir, "import_${ts}.musicxml")
@@ -835,7 +925,7 @@ fun LibraryScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Replace the audio or MusicXML files for this idea.",
+                        "Replace the audio or transcription files for this idea.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -855,7 +945,7 @@ fun LibraryScreen(
                     ) {
                         Icon(Icons.Filled.Description, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(editXmlName ?: "Select MusicXML File (optional)")
+                        Text(editXmlName ?: "Select Transcription File (optional)")
                     }
                 }
             },
@@ -891,7 +981,7 @@ fun LibraryScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Create a new idea from an audio recording. Optionally attach a MusicXML file.",
+                        "Create a new idea from an audio recording. Optionally attach a transcription file (.nnt or .musicxml).",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -918,7 +1008,7 @@ fun LibraryScreen(
                     ) {
                         Icon(Icons.Filled.Description, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(buildXmlName ?: "Select MusicXML (optional)")
+                        Text(buildXmlName ?: "Select Transcription (optional)")
                     }
                     if (buildXmlName != null) {
                         Text(
