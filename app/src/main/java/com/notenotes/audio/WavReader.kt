@@ -25,7 +25,15 @@ object WavReader {
         /** Number of PCM frames (samples / channels). */
         val frameCount: Int get() = if (channels > 0) samples.size / channels else samples.size
 
-        /** Duration of the audio in milliseconds. */
+        /**
+         * Duration of the audio in milliseconds.
+         *
+         * Uses [Math.round] on double arithmetic to avoid off-by-1ms errors
+         * from integer division truncation.  This matters for NNT file
+         * duration matching — without rounding, a file recorded at 44100 Hz
+         * containing exactly 4410 frames would compute as 99ms (truncated)
+         * instead of the correct 100ms.
+         */
         val durationMs: Int get() = if (sampleRate > 0) Math.round(frameCount * 1000.0 / sampleRate).toInt() else 0
 
         override fun equals(other: Any?): Boolean {

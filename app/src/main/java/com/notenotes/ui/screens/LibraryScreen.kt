@@ -1976,78 +1976,125 @@ fun LibraryScreen(
                 }
             } else {
                 // ── Active library ──
-                // Always render the search bar and sort chips to preserve layout
-                // height — hiding them during selection mode would shift the
-                // LazyColumn and cause a jarring scroll jump.
                 val isSelecting = selectedIds.isNotEmpty()
-                Column(modifier = Modifier.then(
-                    if (isSelecting) Modifier.alpha(0f) else Modifier
-                )) {
-                    // Search bar
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { viewModel.setSearchQuery(it) },
-                        placeholder = { Text("Search ideas or folders...") },
-                        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                if (isSelecting) {
+                    // ── Selection stats panel ──
+                    // Fills the space where search bar + chips normally live.
+                    // Shows whimsical/useful statistics about the selected memos.
+                    val selectedIdeas = remember(filteredIdeas, selectedIds) {
+                        filteredIdeas.filter { it.id in selectedIds }
+                    }
+                    val selectionStats = remember(selectedIdeas) {
+                        computeSelectionStats(selectedIdeas)
+                    }
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        singleLine = true,
-                        enabled = !isSelecting
-                    )
-
-                    // Sort chips — Date and Title toggle direction on click
-                    Row(
-                        modifier = Modifier
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
-                        // Date toggle: Newest ↔ Oldest
-                        val isDateSort = sortMode == SortMode.DATE_DESC || sortMode == SortMode.DATE_ASC
-                        val dateLabel = if (sortMode == SortMode.DATE_ASC) "Oldest" else "Newest"
-                        FilterChip(
-                            selected = isDateSort,
-                            onClick = {
-                                viewModel.setSortMode(
-                                    if (sortMode == SortMode.DATE_DESC) SortMode.DATE_ASC
-                                    else SortMode.DATE_DESC
+                        // Row 1: count + tempo range
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = selectionStats.countLabel,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            if (selectionStats.tempoRange.isNotEmpty()) {
+                                Text(
+                                    text = selectionStats.tempoRange,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            },
-                            label = { Text(dateLabel) },
-                            leadingIcon = if (isDateSort) {
-                                { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
-                            } else null
-                        )
-
-                        // Title toggle: A→Z ↔ Z→A
-                        val isTitleSort = sortMode == SortMode.TITLE_AZ || sortMode == SortMode.TITLE_ZA
-                        val titleLabel = if (sortMode == SortMode.TITLE_ZA) "Z → A" else "A → Z"
-                        FilterChip(
-                            selected = isTitleSort,
-                            onClick = {
-                                viewModel.setSortMode(
-                                    if (sortMode == SortMode.TITLE_AZ) SortMode.TITLE_ZA
-                                    else SortMode.TITLE_AZ
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        // Row 2: whimsical stats chips
+                        Row(
+                            modifier = Modifier
+                                .horizontalScroll(rememberScrollState())
+                                .fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            for (chip in selectionStats.chips) {
+                                SuggestionChip(
+                                    onClick = {},
+                                    label = {
+                                        Text(
+                                            text = chip,
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
+                                    }
                                 )
-                            },
-                            label = { Text(titleLabel) },
-                            leadingIcon = if (isTitleSort) {
-                                { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
-                            } else null
-                        )
-
-                        // Recent
-                        FilterChip(
-                            selected = sortMode == SortMode.RECENT,
-                            onClick = { viewModel.setSortMode(SortMode.RECENT) },
-                            label = { Text("Recent") },
-                            leadingIcon = if (sortMode == SortMode.RECENT) {
-                                { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
-                            } else null
-                        )
+                            }
+                        }
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
+                } else {
+                    // ── Search bar + sort chips (normal mode) ──
+                    Column {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { viewModel.setSearchQuery(it) },
+                            placeholder = { Text("Search ideas or folders...") },
+                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            singleLine = true
+                        )
+
+                        // Sort chips — Date and Title toggle direction on click
+                        Row(
+                            modifier = Modifier
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val isDateSort = sortMode == SortMode.DATE_DESC || sortMode == SortMode.DATE_ASC
+                            val dateLabel = if (sortMode == SortMode.DATE_ASC) "Oldest" else "Newest"
+                            FilterChip(
+                                selected = isDateSort,
+                                onClick = {
+                                    viewModel.setSortMode(
+                                        if (sortMode == SortMode.DATE_DESC) SortMode.DATE_ASC
+                                        else SortMode.DATE_DESC
+                                    )
+                                },
+                                label = { Text(dateLabel) },
+                                leadingIcon = if (isDateSort) {
+                                    { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+                                } else null
+                            )
+
+                            val isTitleSort = sortMode == SortMode.TITLE_AZ || sortMode == SortMode.TITLE_ZA
+                            val titleLabel = if (sortMode == SortMode.TITLE_ZA) "Z → A" else "A → Z"
+                            FilterChip(
+                                selected = isTitleSort,
+                                onClick = {
+                                    viewModel.setSortMode(
+                                        if (sortMode == SortMode.TITLE_AZ) SortMode.TITLE_ZA
+                                        else SortMode.TITLE_AZ
+                                    )
+                                },
+                                label = { Text(titleLabel) },
+                                leadingIcon = if (isTitleSort) {
+                                    { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+                                } else null
+                            )
+
+                            FilterChip(
+                                selected = sortMode == SortMode.RECENT,
+                                onClick = { viewModel.setSortMode(SortMode.RECENT) },
+                                label = { Text("Recent") },
+                                leadingIcon = if (sortMode == SortMode.RECENT) {
+                                    { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+                                } else null
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
                 }
 
                 if (filteredIdeas.isEmpty()) {
@@ -2884,4 +2931,92 @@ private fun ColorWheelPickerDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+// ────────────────── Selection stats ──────────────────
+
+/**
+ * Lightweight data bag for the selection-mode stats panel.
+ */
+private data class SelectionStats(
+    val countLabel: String,
+    val tempoRange: String,
+    val chips: List<String>
+)
+
+/**
+ * Compute fun / useful statistics from a set of selected [MelodyIdea]s.
+ *
+ * Stats include: instrument mix, tempo spread, key signatures, time spans,
+ * note counts, pitch range, and whimsical human-readable descriptions.
+ */
+private fun computeSelectionStats(ideas: List<MelodyIdea>): SelectionStats {
+    val n = ideas.size
+    val countLabel = "$n idea${if (n != 1) "s" else ""} selected"
+
+    // Tempo
+    val tempos = ideas.mapNotNull {
+        val t = it.tempoBpm; if (t > 0) t else null
+    }
+    val tempoRange = when {
+        tempos.isEmpty() -> ""
+        tempos.distinct().size == 1 -> "${tempos.first()} BPM"
+        else -> "${tempos.min()}–${tempos.max()} BPM"
+    }
+
+    // Chips — build a list of short, interesting tidbits
+    val chips = mutableListOf<String>()
+
+    // Instruments
+    val instruments = ideas.mapNotNull { it.instrument }.filter { it.isNotBlank() }.distinct()
+    if (instruments.isNotEmpty()) {
+        chips += if (instruments.size == 1) instruments.first()
+                 else "${instruments.size} instruments"
+    }
+
+    // Keys
+    val keys = ideas.mapNotNull { it.keySignature }.filter { it.isNotBlank() }.distinct()
+    if (keys.size == 1) chips += keys.first()
+    else if (keys.size > 1) chips += "${keys.size} keys"
+
+    // Time signatures
+    val timeSigs = ideas.mapNotNull { it.timeSignature }.filter { it.isNotBlank() }.distinct()
+    if (timeSigs.size == 1) chips += timeSigs.first()
+    else if (timeSigs.size > 1) chips += "${timeSigs.size} time sigs"
+
+    // Date range
+    val dates = ideas.map { it.createdAt }
+    if (dates.isNotEmpty()) {
+        val earliest = dates.min()
+        val latest = dates.max()
+        val spanDays = ((latest - earliest) / 86_400_000L).toInt()
+        chips += when {
+            spanDays == 0 -> "same day"
+            spanDays == 1 -> "across 2 days"
+            spanDays < 7 -> "across ${spanDays + 1} days"
+            spanDays < 30 -> "across ${spanDays / 7 + 1} weeks"
+            spanDays < 365 -> "across ${spanDays / 30 + 1} months"
+            else -> "across ${spanDays / 365 + 1} years"
+        }
+    }
+
+    // Groups
+    val groups = ideas.mapNotNull { it.groupName }.filter { it.isNotBlank() }.distinct()
+    if (groups.size == 1) chips += "in ${groups.first()}"
+    else if (groups.size > 1) chips += "${groups.size} folders"
+
+    // Tempo vibe
+    val avgTempo = if (tempos.isNotEmpty()) tempos.average().toInt() else null
+    if (avgTempo != null) {
+        val vibe = when {
+            avgTempo < 60 -> "\uD83D\uDCA4 Lento"       // 💤
+            avgTempo < 90 -> "\uD83C\uDF3F Andante"      // 🌿
+            avgTempo < 120 -> "☀\uFE0F Moderato"         // ☀️
+            avgTempo < 150 -> "\uD83D\uDD25 Allegro"     // 🔥
+            else -> "⚡ Presto"
+        }
+        chips += vibe
+    }
+
+    return SelectionStats(countLabel, tempoRange, chips)
 }

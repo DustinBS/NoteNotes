@@ -128,6 +128,35 @@ class WavReaderTest {
     // ══════════════════════════════════════════════════════════════════════
 
     @Test
+    fun wavData_durationMs_roundsCorrectly_regressionOffByOne() {
+        // REGRESSION: Integer division (frameCount * 1000 / sampleRate) truncates.
+        // 4410 frames at 44100 Hz = 100.0ms exactly, but integer truncation
+        // would give 99ms.  Math.round on double arithmetic gives 100.
+        val data = WavReader.WavData(ShortArray(4410), 44100, 1, 16)
+        assertEquals("4410 frames at 44100 Hz should be exactly 100ms", 100, data.durationMs)
+    }
+
+    @Test
+    fun wavData_durationMs_roundsUpCorrectly() {
+        // 4411 frames at 44100 Hz = 100.0227ms → Math.round → 100
+        val data = WavReader.WavData(ShortArray(4411), 44100, 1, 16)
+        assertEquals(100, data.durationMs)
+    }
+
+    @Test
+    fun wavData_durationMs_roundsHalfUp() {
+        // 22050 frames at 44100 Hz = exactly 500ms (no rounding issue)
+        val data = WavReader.WavData(ShortArray(22050), 44100, 1, 16)
+        assertEquals(500, data.durationMs)
+    }
+
+    @Test
+    fun wavData_durationMs_zeroSampleRate_returnsZero() {
+        val data = WavReader.WavData(ShortArray(100), 0, 1, 16)
+        assertEquals(0, data.durationMs)
+    }
+
+    @Test
     fun wavData_equality_contentBased() {
         val a = WavReader.WavData(shortArrayOf(1, 2, 3), 44100, 1, 16)
         val b = WavReader.WavData(shortArrayOf(1, 2, 3), 44100, 1, 16)

@@ -251,6 +251,14 @@ class MusicXmlParser {
             trimmedNotes.removeAt(trimmedNotes.lastIndex)
         }
 
+        // Strip leading rests (synthetic rests inserted by MusicXmlGenerator
+        // to preserve starting silence).  The first real note already has
+        // timePositionMs set by the cumulative currentTimeMs, so the timing
+        // survives without the rest elements.
+        while (trimmedNotes.isNotEmpty() && trimmedNotes.first().isRest) {
+            trimmedNotes.removeAt(0)
+        }
+
         return ParseResult(
             notes = trimmedNotes,
             instrument = parsedInstrument,

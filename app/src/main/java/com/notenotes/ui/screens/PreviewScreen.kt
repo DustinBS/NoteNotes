@@ -813,9 +813,17 @@ fun PreviewScreen(
 
             // Content based on selected tab
             // Always render SheetMusicWebView so PDF export works from any tab
+            //
+            // FIX HISTORY (cursor desync): leadingRestOffset accounts for
+            // synthetic rests that MusicXmlGenerator inserts before the first
+            // note.  Without it, the alphaTab cursor was N beats behind.
             val sheetCurrentNoteIndex = remember(playbackProgress, notesList, leadingRestOffset) {
                 viewModel.getCurrentNoteIndex(playbackProgress) + leadingRestOffset
             }
+            // FIX HISTORY (tab flicker): .background() and .clipToBounds()
+            // prevent the WebView from flashing a white rectangle when
+            // switching away from the Sheet tab and back.  containerColor
+            // on the Scaffold fills the gap for the brief layout pass.
             Box(
                 modifier = Modifier
                     .weight(if (selectedTab == 0) 1f else 0.001f)

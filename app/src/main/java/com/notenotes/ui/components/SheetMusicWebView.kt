@@ -85,6 +85,13 @@ fun SheetMusicWebView(
 
     // Update cursor position based on note index — throttled to ~10 Hz.
     // Uses delay instead of skip so every note change is eventually sent.
+    //
+    // FIX HISTORY: Previously used a skip-based throttle that silently
+    // dropped cursor moves arriving within the 100ms window.  This caused
+    // the cursor to "stick" on the wrong note for fast passages because
+    // the final move was never sent.  Switching to delay-based throttle
+    // ensures every note change reaches alphaTab while still rate-limiting
+    // browser calls to avoid jank.
     var lastCursorUpdate by remember { mutableStateOf(0L) }
     LaunchedEffect(currentNoteIndex, isPlaying) {
         val wv = webView ?: return@LaunchedEffect

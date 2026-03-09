@@ -203,6 +203,72 @@ class PreviewViewModelSeekTest {
         assertEquals(0, viewModel.getCurrentNoteIndex(0.001f))
     }
 
+    // ── leadingRestBeatCount: cursor offset regression ───────────────────────
+    // REGRESSION: When the first note has timePositionMs > 0, MusicXmlGenerator
+    // inserts synthetic rests before it.  The leading rest beat count must
+    // offset the note index passed to alphaTab's setCursorToNoteIndex() so
+    // the cursor highlights the correct beat in the rendered score.
+
+    @Test
+    fun leadingRestBeatCount_noNotes_isZero() {
+        setField("_notesList", emptyList<MusicalNote>())
+        invokeRefreshLeadingRest()
+        assertEquals(0, viewModel.leadingRestBeatCount.value)
+    }
+
+    @Test
+    fun leadingRestBeatCount_firstNoteAtZero_isZero() {
+        setNotesAndTempo(
+            listOf(quarterNote(60).copy(timePositionMs = 0f)),
+            tempoBpm = 120
+        )
+        invokeRefreshLeadingRest()
+        assertEquals(0, viewModel.leadingRestBeatCount.value)
+    }
+
+    @Test
+    fun leadingRestBeatCount_firstNoteWithNullPosition_isZero() {
+        setNotesAndTempo(
+            listOf(quarterNote(60)),  // timePositionMs = null
+            tempoBpm = 120
+        )
+        invokeRefreshLeadingRest()
+        assertEquals(0, viewModel.leadingRestBeatCount.value)
+    }
+
+    @Test
+    fun leadingRestBeatCount_firstNoteAt500ms_oneQuarterRest() {
+        // At 120 BPM: quarter note = 500ms = 4 ticks.
+        // 500ms / 125ms per tick = 4 ticks → one quarter rest → 1 beat
+        setNotesAndTempo(
+            listOf(quarterNote(60).copy(timePositionMs = 500f)),
+            tempoBpm = 120
+        )
+        invokeRefreshLeadingRest()
+        assertEquals(1, viewModel.leadingRestBeatCount.value)
+    }
+
+    @Test
+    fun leadingRestBeatCount_firstNoteAt1000ms_twoQuarterRests() {
+        // 1000ms / 125ms = 8 ticks → one half note rest → 1 beat
+        // Actually: 8 ticks: decomposeToStandard tries 16(no), 12(no), 8(yes) → 1 rest
+        setNotesAndTempo(
+            listOf(quarterNote(60).copy(timePositionMs = 1000f)),
+            tempoBpm = 120
+        )
+        invokeRefreshLeadingRest()
+        assertTrue(
+            "Expected >= 1 leading rest beat for 1000ms gap",
+            viewModel.leadingRestBeatCount.value >= 1
+        )
+    }
+
+    private fun invokeRefreshLeadingRest() {
+        val method = PreviewViewModel::class.java.getDeclaredMethod("refreshLeadingRestBeatCount")
+        method.isAccessible = true
+        method.invoke(viewModel)
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private fun quarterNote(midi: Int) = MusicalNote(

@@ -41,12 +41,14 @@ class NoteTimingHelperTest {
     }
 
     @Test
-    fun computeNoteStartMs_nonManualWithPositionSet_ignoresPosition() {
-        // isManual=false but timePositionMs set → should use cumulative
+    fun computeNoteStartMs_nonManualWithPositionSet_usesPosition() {
+        // isManual=false but timePositionMs set → uses timePositionMs (not cumulative).
+        // computeNoteStartMs uses timePositionMs whenever it is set, regardless
+        // of isManual, so the sheet-music cursor stays in sync with the Notes tab.
         val note = MusicalNote(midiPitch = 60, durationTicks = 4, type = "quarter",
             isManual = false, timePositionMs = 999f)
         val startMs = NoteTimingHelper.computeNoteStartMs(note, cumulativeMs = 200f)
-        assertEquals(200f, startMs, 0.01f)
+        assertEquals(999f, startMs, 0.01f)
     }
 
     // ══════════════════════════════════════════════════════════════════════

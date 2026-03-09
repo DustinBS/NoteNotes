@@ -72,6 +72,17 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     private val _audioDurationMs = MutableStateFlow(0)
     val audioDurationMs: StateFlow<Int> = _audioDurationMs
 
+    /**
+     * Number of synthetic rest beats that MusicXmlGenerator inserts before
+     * the first real note (to preserve leading silence).  PreviewScreen adds
+     * this offset to the note index so the alphaTab cursor highlights the
+     * correct beat in the rendered score.
+     *
+     * FIX HISTORY: Added to fix sheet-music cursor desync when the first
+     * note has timePositionMs > 0.  Without this offset the cursor would
+     * be N beats behind because the rendered score has N extra rest beats
+     * that don't exist in notesList.
+     */
     private val _leadingRestBeatCount = MutableStateFlow(0)
     val leadingRestBeatCount: StateFlow<Int> = _leadingRestBeatCount
 
