@@ -119,6 +119,28 @@ class MusicXmlGenerator {
         var noteIndex = 0
         var pendingTieStop = false
         val notes = result.notes.toMutableList()
+
+        // Preserve starting silence: if the first note has a positive
+        // timePositionMs, insert leading rest(s) so the offset survives
+        // a MusicXML round-trip.
+        if (notes.isNotEmpty()) {
+            val firstNote = notes.first()
+            val firstTimeMs = firstNote.timePositionMs
+            if (firstTimeMs != null && firstTimeMs > 0f) {
+                val tickMs = 60000.0 / result.tempoBpm / divisions
+                val gapTicks = Math.round(firstTimeMs / tickMs).toInt()
+                if (gapTicks > 0) {
+                    notes.add(0, MusicalNote(
+                        midiPitch = 0,
+                        durationTicks = gapTicks,
+                        type = ticksToType(gapTicks, divisions),
+                        dotted = false,
+                        isRest = true,
+                        timePositionMs = 0f
+                    ))
+                }
+            }
+        }
         
         while (noteIndex < notes.size) {
             sb.appendLine("""    <measure number="$measureNumber">""")

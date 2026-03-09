@@ -2,6 +2,7 @@ package com.notenotes.ui.screens
 
 import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -30,6 +31,9 @@ import com.notenotes.processing.PitchAlgorithm
 import com.notenotes.model.KeySignature
 import com.notenotes.model.TimeSignature
 import com.notenotes.model.InstrumentProfile
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
+import kotlinx.coroutines.delay
 
 private const val PREFS_NAME = "notenotes_display"
 private const val KEY_BARS_PER_ROW = "bars_per_row"
@@ -53,6 +57,7 @@ fun PreviewScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val waveformData by viewModel.waveformData.collectAsState()
     val audioDurationMs by viewModel.audioDurationMs.collectAsState()
+    val leadingRestOffset by viewModel.leadingRestBeatCount.collectAsState()
 
     val isRetranscribing by viewModel.isRetranscribing.collectAsState()
     val selectedNoteIndex by viewModel.selectedNoteIndex.collectAsState()
@@ -439,6 +444,7 @@ fun PreviewScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
@@ -770,6 +776,7 @@ fun PreviewScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
                 .padding(padding)
         ) {
             // Error message
@@ -806,13 +813,15 @@ fun PreviewScreen(
 
             // Content based on selected tab
             // Always render SheetMusicWebView so PDF export works from any tab
-            val sheetCurrentNoteIndex = remember(playbackProgress, notesList) {
-                viewModel.getCurrentNoteIndex(playbackProgress)
+            val sheetCurrentNoteIndex = remember(playbackProgress, notesList, leadingRestOffset) {
+                viewModel.getCurrentNoteIndex(playbackProgress) + leadingRestOffset
             }
             Box(
                 modifier = Modifier
                     .weight(if (selectedTab == 0) 1f else 0.001f)
                     .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.background)
+                    .clipToBounds()
                     .then(if (selectedTab != 0) Modifier.height(0.dp) else Modifier)
             ) {
                 if (musicXml != null) {

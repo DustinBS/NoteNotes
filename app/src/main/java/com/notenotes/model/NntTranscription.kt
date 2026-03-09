@@ -17,6 +17,9 @@ data class NntTranscription(
     val tempoBpm: Int = 120,
     val keySignature: String? = null,
     val timeSignature: String? = null,
+    /** Audio duration in milliseconds — preserved across export/import to avoid
+     *  duration-mismatch warnings caused by minor rounding differences. */
+    val durationMs: Long? = null,
     val notes: List<MusicalNote> = emptyList()
 ) {
     companion object {

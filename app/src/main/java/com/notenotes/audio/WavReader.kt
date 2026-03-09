@@ -26,7 +26,7 @@ object WavReader {
         val frameCount: Int get() = if (channels > 0) samples.size / channels else samples.size
 
         /** Duration of the audio in milliseconds. */
-        val durationMs: Int get() = if (sampleRate > 0) (frameCount * 1000L / sampleRate).toInt() else 0
+        val durationMs: Int get() = if (sampleRate > 0) Math.round(frameCount * 1000.0 / sampleRate).toInt() else 0
 
         override fun equals(other: Any?): Boolean {
             if (this === other) return true

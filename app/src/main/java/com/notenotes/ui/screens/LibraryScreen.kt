@@ -26,6 +26,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -35,11 +36,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.buildAnnotatedString
@@ -59,6 +57,7 @@ import com.notenotes.model.NntTranscription
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
@@ -392,7 +391,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                     val nnt = context.contentResolver.openInputStream(uri)?.use { input ->
                         NntFile.read(input)
                     } ?: return null
-                    computeNotesDurationMs(nnt.notes, nnt.tempoBpm)
+                    // Prefer the stored audio duration (exact, no rounding)
+                    // over recomputing from note ticks which may differ slightly.
+                    nnt.durationMs ?: computeNotesDurationMs(nnt.notes, nnt.tempoBpm)
                 }
                 "musicxml", "xml" -> {
                     val xml = context.contentResolver.openInputStream(uri)?.use { input ->
@@ -1827,16 +1828,32 @@ fun LibraryScreen(
 
     Scaffold(
         topBar = {
-            if (selectedIds.isNotEmpty()) {
-                // Selection mode top bar
-                TopAppBar(
-                    title = { Text("${selectedIds.size} selected", style = MaterialTheme.typography.titleSmall) },
-                    navigationIcon = {
+            // Single TopAppBar with conditional content — keeps composable
+            // identity stable so Scaffold padding never shifts on selection.
+            val isSelecting = selectedIds.isNotEmpty()
+            TopAppBar(
+                title = {
+                    if (isSelecting) {
+                        Text("${selectedIds.size} selected", style = MaterialTheme.typography.titleSmall)
+                    } else {
+                        Text(if (showingTrash) "Trash" else "Library")
+                    }
+                },
+                navigationIcon = {
+                    if (isSelecting) {
                         IconButton(onClick = { viewModel.clearSelection() }) {
                             Icon(Icons.Filled.Close, contentDescription = "Cancel")
                         }
-                    },
-                    actions = {
+                    } else {
+                        IconButton(onClick = {
+                            if (showingTrash) showingTrash = false else onNavigateBack()
+                        }) {
+                            Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                },
+                actions = {
+                    if (isSelecting) {
                         IconButton(onClick = { viewModel.selectAll(filteredIdeas) }, modifier = Modifier.size(48.dp)) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(Icons.Filled.SelectAll, contentDescription = "Select All", modifier = Modifier.size(20.dp))
@@ -1868,62 +1885,48 @@ fun LibraryScreen(
                                 Text("Zip", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
                             }
                         }
-                    }
-                )
-            } else {
-                TopAppBar(
-                    title = { Text(if (showingTrash) "Trash" else "Library") },
-                    navigationIcon = {
+                    } else if (!showingTrash) {
+                        IconButton(onClick = { showBuildDialog = true }) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Filled.Construction, contentDescription = "Build", modifier = Modifier.size(20.dp))
+                                Text("Build", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                            }
+                        }
                         IconButton(onClick = {
-                            if (showingTrash) showingTrash = false else onNavigateBack()
+                            importLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
                         }) {
-                            Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Filled.FolderZip, contentDescription = "Unzip", modifier = Modifier.size(20.dp))
+                                Text("Unzip", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                            }
                         }
-                    },
-                    actions = {
-                        if (!showingTrash) {
-                            IconButton(onClick = { showBuildDialog = true }) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(Icons.Filled.Construction, contentDescription = "Build", modifier = Modifier.size(20.dp))
-                                    Text("Build", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
-                                }
-                            }
-                            IconButton(onClick = {
-                                importLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
-                            }) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(Icons.Filled.FolderZip, contentDescription = "Unzip", modifier = Modifier.size(20.dp))
-                                    Text("Unzip", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
-                                }
-                            }
-                            IconButton(
-                                onClick = { showingTrash = true },
-                                modifier = Modifier.size(52.dp)
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    BadgedBox(
-                                        badge = {
-                                            if (trashIdeas.isNotEmpty()) {
-                                                Badge { Text("${trashIdeas.size}") }
-                                            }
+                        IconButton(
+                            onClick = { showingTrash = true },
+                            modifier = Modifier.size(52.dp)
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                BadgedBox(
+                                    badge = {
+                                        if (trashIdeas.isNotEmpty()) {
+                                            Badge { Text("${trashIdeas.size}") }
                                         }
-                                    ) {
-                                        Icon(Icons.Filled.Delete, contentDescription = "Trash", modifier = Modifier.size(20.dp))
                                     }
-                                    Text("Trash", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                                ) {
+                                    Icon(Icons.Filled.Delete, contentDescription = "Trash", modifier = Modifier.size(20.dp))
                                 }
+                                Text("Trash", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
                             }
-                        } else if (trashIdeas.isNotEmpty()) {
-                            IconButton(onClick = { showEmptyTrashDialog = true }, modifier = Modifier.size(52.dp)) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(Icons.Filled.DeleteForever, contentDescription = "Empty Trash", modifier = Modifier.size(20.dp))
-                                    Text("Empty", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
-                                }
+                        }
+                    } else if (trashIdeas.isNotEmpty()) {
+                        IconButton(onClick = { showEmptyTrashDialog = true }, modifier = Modifier.size(52.dp)) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Filled.DeleteForever, contentDescription = "Empty Trash", modifier = Modifier.size(20.dp))
+                                Text("Empty", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
                             }
                         }
                     }
-                )
-            }
+                }
+            )
         }
     ) { padding ->
         Column(
@@ -1973,7 +1976,13 @@ fun LibraryScreen(
                 }
             } else {
                 // ── Active library ──
-                if (selectedIds.isEmpty()) {
+                // Always render the search bar and sort chips to preserve layout
+                // height — hiding them during selection mode would shift the
+                // LazyColumn and cause a jarring scroll jump.
+                val isSelecting = selectedIds.isNotEmpty()
+                Column(modifier = Modifier.then(
+                    if (isSelecting) Modifier.alpha(0f) else Modifier
+                )) {
                     // Search bar
                     OutlinedTextField(
                         value = searchQuery,
@@ -1983,7 +1992,8 @@ fun LibraryScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
-                        singleLine = true
+                        singleLine = true,
+                        enabled = !isSelecting
                     )
 
                     // Sort chips — Date and Title toggle direction on click
@@ -2047,49 +2057,62 @@ fun LibraryScreen(
                         subtitle = if (searchQuery.isBlank()) "Record your first melody!" else null
                     )
                 } else {
-                    // Drag-to-select: when in selection mode, dragging across items selects them
+                    // ── Samsung-style drag-to-select ──────────────────────────
+                    // Long-press starts selection + immediately allows drag-select
+                    // without lifting the finger.  Auto-scrolls near edges.
                     var isDragSelecting by remember { mutableStateOf(false) }
-                    val isSelectMode = selectedIds.isNotEmpty()
+                    var currentDragY by remember { mutableStateOf(0f) }
+
+                    // Auto-scroll while dragging near top/bottom edges
+                    LaunchedEffect(isDragSelecting) {
+                        if (!isDragSelecting) return@LaunchedEffect
+                        val edgeZone = 120f
+                        while (true) {
+                            val y = currentDragY
+                            val vpHeight = listState.layoutInfo.viewportSize.height.toFloat()
+                            val scrollAmount = when {
+                                y < edgeZone -> -(edgeZone - y) / edgeZone * 25f
+                                y > vpHeight - edgeZone -> (y - vpHeight + edgeZone) / edgeZone * 25f
+                                else -> 0f
+                            }
+                            if (scrollAmount != 0f) {
+                                listState.scrollBy(scrollAmount)
+                                val hitKey = listState.layoutInfo.visibleItemsInfo
+                                    .find { y >= it.offset && y < it.offset + it.size }
+                                    ?.key as? Long
+                                if (hitKey != null) viewModel.addToSelection(hitKey)
+                            }
+                            delay(16)
+                        }
+                    }
 
                     LazyColumn(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .then(if (isSelectMode) {
-                                Modifier.pointerInput(Unit) {
-                                    awaitEachGesture {
-                                        val down = awaitFirstDown(pass = PointerEventPass.Initial)
-                                        var totalDrag = 0f
-                                        var dragActive = false
-
-                                        while (true) {
-                                            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
-                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                            if (!change.pressed) break
-
-                                            totalDrag += abs(change.positionChange().y)
-                                            if (totalDrag > viewConfiguration.touchSlop && !dragActive) {
-                                                dragActive = true
-                                                isDragSelecting = true
-                                            }
-
-                                            if (dragActive) {
-                                                change.consume()
-                                                // Find item at current Y and add to selection
-                                                val y = change.position.y
-                                                val hitItem = listState.layoutInfo.visibleItemsInfo.find { item ->
-                                                    y >= item.offset && y < item.offset + item.size
-                                                }
-                                                val hitKey = hitItem?.key
-                                                if (hitKey is Long) {
-                                                    viewModel.addToSelection(hitKey)
-                                                }
-                                            }
-                                        }
-                                        isDragSelecting = false
-                                    }
-                                }
-                            } else Modifier),
+                            .pointerInput(Unit) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = { offset ->
+                                        isDragSelecting = true
+                                        currentDragY = offset.y
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        val key = listState.layoutInfo.visibleItemsInfo
+                                            .find { offset.y >= it.offset && offset.y < it.offset + it.size }
+                                            ?.key as? Long
+                                        if (key != null) viewModel.addToSelection(key)
+                                    },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        currentDragY = change.position.y
+                                        val key = listState.layoutInfo.visibleItemsInfo
+                                            .find { currentDragY >= it.offset && currentDragY < it.offset + it.size }
+                                            ?.key as? Long
+                                        if (key != null) viewModel.addToSelection(key)
+                                    },
+                                    onDragEnd = { isDragSelecting = false },
+                                    onDragCancel = { isDragSelecting = false }
+                                )
+                            },
                         userScrollEnabled = !isDragSelecting,
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -2110,10 +2133,6 @@ fun LibraryScreen(
                                             viewModel.updateLastOpenedAt(idea.id)
                                             onNavigateToPreview(idea.id)
                                         }
-                                    },
-                                    onLongClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.toggleSelection(idea.id)
                                     },
                                     onDelete = { viewModel.softDeleteIdea(idea) },
                                     onRename = { newTitle -> viewModel.renameIdea(idea.id, newTitle) },
@@ -2160,10 +2179,6 @@ fun LibraryScreen(
                                                 onNavigateToPreview(idea.id)
                                             }
                                         },
-                                        onLongClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            viewModel.toggleSelection(idea.id)
-                                        },
                                         onDelete = { viewModel.softDeleteIdea(idea) },
                                         onRename = { newTitle -> viewModel.renameIdea(idea.id, newTitle) },
                                         onDuplicate = { viewModel.duplicateIdea(idea) },
@@ -2202,10 +2217,6 @@ fun LibraryScreen(
                                         viewModel.updateLastOpenedAt(idea.id)
                                         onNavigateToPreview(idea.id)
                                     }
-                                },
-                                onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.toggleSelection(idea.id)
                                 },
                                 onDelete = { viewModel.softDeleteIdea(idea) },
                                 onRename = { newTitle -> viewModel.renameIdea(idea.id, newTitle) },
@@ -2352,7 +2363,6 @@ private fun GroupHeader(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun IdeaCard(
     idea: MelodyIdea,
@@ -2361,7 +2371,6 @@ private fun IdeaCard(
     accentColor: Color?,
     availableGroups: Map<String, String>,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
     onDelete: () -> Unit,
     onRename: (String) -> Unit,
     onDuplicate: () -> Unit,
@@ -2415,10 +2424,7 @@ private fun IdeaCard(
                     }
                 } else Modifier
             )
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            ),
+            .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = when {
                 isSelected -> MaterialTheme.colorScheme.primaryContainer

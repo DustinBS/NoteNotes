@@ -83,16 +83,17 @@ fun SheetMusicWebView(
         }
     }
 
-    // Update cursor position based on note index — throttled to ~10 Hz
+    // Update cursor position based on note index — throttled to ~10 Hz.
+    // Uses delay instead of skip so every note change is eventually sent.
     var lastCursorUpdate by remember { mutableStateOf(0L) }
     LaunchedEffect(currentNoteIndex, isPlaying) {
         val wv = webView ?: return@LaunchedEffect
         if ((isPlaying || cursorShown) && currentNoteIndex >= 0) {
             val now = System.currentTimeMillis()
-            if (now - lastCursorUpdate >= 100) {  // max 10 updates per second
-                lastCursorUpdate = now
-                wv.evaluateJavascript("setCursorToNoteIndex($currentNoteIndex)", null)
-            }
+            val elapsed = now - lastCursorUpdate
+            if (elapsed < 100) kotlinx.coroutines.delay(100 - elapsed)
+            lastCursorUpdate = System.currentTimeMillis()
+            wv.evaluateJavascript("setCursorToNoteIndex($currentNoteIndex)", null)
         }
     }
 
@@ -111,8 +112,11 @@ fun SheetMusicWebView(
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
 
-                // Prevent white flash while HTML/JS loads
-                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                // Use dark background to prevent white flash.
+                // The HTML body starts transparent; it switches to white
+                // in the renderFinished callback, which is when hasRendered
+                // flips to true and this view becomes visible (alpha 0→1).
+                setBackgroundColor(android.graphics.Color.parseColor("#1C1B1F"))
 
                 settings.apply {
                     javaScriptEnabled = true

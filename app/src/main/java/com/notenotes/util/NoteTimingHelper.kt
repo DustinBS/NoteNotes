@@ -10,8 +10,14 @@ import com.notenotes.model.MusicalNote
  * isCursorInsideNote, splitNoteAtCursor, recalculateNoteDurations, addNote).
  *
  * Key concept: each note's start time is either:
- * - Its explicit `timePositionMs` (if `isManual == true` and `timePositionMs != null`)
- * - Or the cumulative end time of all preceding notes (auto-transcribed notes)
+ * - Its explicit `timePositionMs` (when available — set by both manual edits
+ *   and MusicXML parsing, used for accurate playback sync)
+ * - Or the cumulative end time of all preceding notes (auto-transcribed notes
+ *   that don't yet have an explicit time position)
+ *
+ * DEPENDENCY NOTE: This logic MUST match NoteNameView's time computation
+ * (NoteNameView.kt, see "Compute time in seconds for each note") so the
+ * sheet-music cursor and the Notes tab stay in sync during playback.
  */
 object NoteTimingHelper {
 
@@ -23,10 +29,14 @@ object NoteTimingHelper {
 
     /**
      * Compute the start time of a note given its cumulative position.
-     * Manual notes with a timePositionMs use that; otherwise uses cumulative.
+     *
+     * Uses `timePositionMs` whenever it is set (regardless of `isManual`),
+     * falls back to cumulative position for notes without an explicit time.
+     * This matches NoteNameView's time computation — both must stay in sync
+     * so the sheet-music cursor highlights the same note the Notes tab shows.
      */
     fun computeNoteStartMs(note: MusicalNote, cumulativeMs: Float): Float {
-        return if (note.isManual && note.timePositionMs != null) {
+        return if (note.timePositionMs != null) {
             note.timePositionMs
         } else {
             cumulativeMs

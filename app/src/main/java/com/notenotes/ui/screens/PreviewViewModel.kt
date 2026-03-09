@@ -72,6 +72,9 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     private val _audioDurationMs = MutableStateFlow(0)
     val audioDurationMs: StateFlow<Int> = _audioDurationMs
 
+    private val _leadingRestBeatCount = MutableStateFlow(0)
+    val leadingRestBeatCount: StateFlow<Int> = _leadingRestBeatCount
+
     private val _isRetranscribing = MutableStateFlow(false)
     val isRetranscribing: StateFlow<Boolean> = _isRetranscribing
 
@@ -157,6 +160,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                         musicXmlGenerator.generateMusicXml(result)
                     )
                     _notesList.value = notes
+                    refreshLeadingRestBeatCount()
                     Log.d(TAG, "loadIdea: MusicXML regenerated successfully")
                 } else {
                     // Fallback: try loading from saved file (no notes in DB)
@@ -208,6 +212,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                                 )
                                 currentResult = result
                                 _notesList.value = parsedNotes
+                                refreshLeadingRestBeatCount()
 
                                 // Regenerate XML from parsed notes for consistency
                                 // (so first-load and re-open show the same render)
@@ -690,6 +695,38 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * Count how many beats the synthetic leading rest occupies in the
+     * rendered alphaTab score.  MusicXmlGenerator inserts rests when the
+     * first note has timePositionMs > 0 to preserve starting silence, but
+     * those beats don't exist in notesList.  This offset aligns the
+     * note-index-based cursor with the actual rendered beats.
+     */
+    private fun refreshLeadingRestBeatCount() {
+        val notes = _notesList.value
+        val tempoBpm = _idea.value?.tempoBpm ?: 120
+        if (notes.isEmpty()) { _leadingRestBeatCount.value = 0; return }
+        val firstTimeMs = notes.first().timePositionMs
+        if (firstTimeMs == null || firstTimeMs <= 0f) {
+            _leadingRestBeatCount.value = 0; return
+        }
+        val divisions = 4
+        val tickMs = 60000.0 / tempoBpm / divisions
+        val gapTicks = Math.round(firstTimeMs / tickMs).toInt()
+        if (gapTicks <= 0) { _leadingRestBeatCount.value = 0; return }
+        // Mirror MusicXmlGenerator.decomposeToStandard: greedy decomposition
+        // into standard note values (divisions=4).
+        val stdTicks = listOf(16, 12, 8, 6, 4, 3, 2, 1)
+        var remaining = gapTicks
+        var count = 0
+        while (remaining > 0) {
+            val sd = stdTicks.firstOrNull { it <= remaining }
+            if (sd != null) { remaining -= sd; count++ }
+            else { count++; break }
+        }
+        _leadingRestBeatCount.value = count
+    }
+
+    /**
      * Check if the edit cursor is currently inside a note (for showing split button).
      */
     fun isCursorInsideNote(): Boolean {
@@ -898,9 +935,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 // durations, chords, etc.) rather than a potentially stale file.
                 val result = buildResult()
                 if (result != null) {
-                    Log.i(TAG, "performSave: Generating MusicXML from ${result.notes.size} notes, " +
-                            "pitches=${result.notes.map { it.midiPitch }}, " +
-                            "durations=${result.notes.map { it.durationTicks }}")
                     val xml = MusicXmlSanitizer.sanitize(
                         musicXmlGenerator.generateMusicXml(result)
                     )
@@ -1171,6 +1205,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
      */
     private fun updateNotesAndRefresh(notes: List<MusicalNote>) {
         _notesList.value = notes
+        refreshLeadingRestBeatCount()
 
         // Cancel any pending save — the latest edit wins
         saveJob?.cancel()
@@ -1343,6 +1378,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 _idea.value = updatedIdea
                 _musicXml.value = xmlContent
                 _notesList.value = result.notes
+                refreshLeadingRestBeatCount()
 
                 Log.i(TAG, "retranscribe: Done — ${result.notes.size} notes, " +
                     "key=${result.keySignature}, time=${result.timeSignature}, " +
@@ -1394,16 +1430,19 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
 
     /**
      * Build an [NntTranscription] from the current idea's notes + metadata.
+     * Includes the audio duration so import can compare without rounding errors.
      */
     private fun buildNntTranscription(): NntTranscription? {
         val melodyIdea = _idea.value ?: return null
         val notesJson = melodyIdea.notes ?: return null
+        val audioDur = _audioDurationMs.value.let { if (it > 0) it.toLong() else null }
         return NntFile.fromNotesJson(
             notesJson = notesJson,
             instrument = melodyIdea.instrument,
             tempoBpm = melodyIdea.tempoBpm,
             keySignature = melodyIdea.keySignature,
-            timeSignature = melodyIdea.timeSignature
+            timeSignature = melodyIdea.timeSignature,
+            durationMs = audioDur
         )
     }
 

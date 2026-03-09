@@ -186,22 +186,29 @@ fun NoteNameView(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        var beatCounter = 0.0
-        val beatDuration = 60.0 / tempoBpm // seconds per beat
-        val divisionsPerBeat = 4 // assuming quarter = 1 division * 4
+        // Compute time in seconds for each note — matches NoteTimingHelper logic
+        val tickMs = 60000.0 / tempoBpm / 4.0 // ms per tick (divisions=4)
+        var cumulativeMs = 0.0
 
         for ((index, note) in notes.withIndex()) {
-            val beatPosition = beatCounter / divisionsPerBeat
+            val startMs = if (note.isManual && note.timePositionMs != null) {
+                note.timePositionMs!!.toDouble()
+            } else if (note.timePositionMs != null) {
+                note.timePositionMs!!.toDouble()
+            } else {
+                cumulativeMs
+            }
+            val timePositionSeconds = startMs / 1000.0
             NoteNameRow(
                 note = note,
                 index = index + 1,
-                beatPosition = beatPosition,
+                timePositionSeconds = timePositionSeconds,
                 isCurrentlyPlaying = index == currentNoteIndex,
                 onClick = if (onUpdateNote != null || onDeleteNote != null) {
                     { editingNoteIndex = index }
                 } else null
             )
-            beatCounter += note.durationTicks
+            cumulativeMs = startMs + note.durationTicks * tickMs
         }
     }
 }
@@ -297,7 +304,7 @@ private fun NoteNameChip(
 private fun NoteNameRow(
     note: MusicalNote,
     index: Int,
-    beatPosition: Double,
+    timePositionSeconds: Double,
     isCurrentlyPlaying: Boolean = false,
     onClick: (() -> Unit)? = null
 ) {
@@ -324,12 +331,8 @@ private fun NoteNameRow(
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Beat position or time position for manual notes
-        val posLabel = if (note.isManual && note.timePositionMs != null) {
-            String.format("%.1fs", note.timePositionMs / 1000f)
-        } else {
-            String.format("%.1f", beatPosition + 1)
-        }
+        // Always show time in seconds — consistent with transport controls
+        val posLabel = String.format("%.1fs", timePositionSeconds)
         Text(
             text = posLabel,
             style = MaterialTheme.typography.bodySmall,

@@ -53,7 +53,8 @@ object NntFile {
         instrument: String = "piano",
         tempoBpm: Int = 120,
         keySignature: String? = null,
-        timeSignature: String? = null
+        timeSignature: String? = null,
+        durationMs: Long? = null
     ): NntTranscription {
         val notesType = object : TypeToken<List<MusicalNote>>() {}.type
         val notes: List<MusicalNote> = MusicalNote.sanitizeList(
@@ -64,6 +65,7 @@ object NntFile {
             tempoBpm = tempoBpm,
             keySignature = keySignature,
             timeSignature = timeSignature,
+            durationMs = durationMs,
             notes = notes
         )
     }

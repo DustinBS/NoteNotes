@@ -11,7 +11,7 @@
             box-sizing: border-box;
         }
         body {
-            background-color: #FFFFFF;
+            background-color: transparent;
             overflow-x: auto;
             overflow-y: auto;
             font-family: sans-serif;
@@ -117,6 +117,8 @@
                 api.renderFinished.on(function() {
                     var surface = document.querySelector('.at-surface');
                     pdfLog('renderFinished: surface=' + (surface ? surface.offsetWidth + 'x' + surface.offsetHeight : 'null') + ', container=' + document.getElementById('alphaTab').offsetWidth);
+                    // Set body background to white now that content is rendered
+                    document.body.style.backgroundColor = '#FFFFFF';
                     if (window.Android) {
                         window.Android.onRenderComplete();
                     }
