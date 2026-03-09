@@ -3,6 +3,7 @@ package com.notenotes.ui.screens
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -64,6 +65,7 @@ fun PreviewScreen(
     val isWindowLocked by viewModel.isWindowLocked.collectAsState()
     val isRenameDialogOpen by viewModel.isRenameDialogOpen.collectAsState()
     val playbackSpeed by viewModel.playbackSpeed.collectAsState()
+    val saveConflict by viewModel.saveConflict.collectAsState()
 
     // Tab state from ViewModel (persists across navigation)
     val selectedTab by viewModel.selectedTab.collectAsState()
@@ -140,6 +142,50 @@ fun PreviewScreen(
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.closeRenameDialog() }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Save conflict dialog (folder already exists)
+    if (saveConflict != null) {
+        var renameFolderText by remember(saveConflict) {
+            mutableStateOf(saveConflict!!.folderName)
+        }
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelSave() },
+            title = { Text("Folder Already Exists") },
+            text = {
+                Column {
+                    Text(
+                        "A folder named \"${saveConflict!!.folderName}\" already contains files. " +
+                            "You can overwrite the existing files or choose a different name.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = renameFolderText,
+                        onValueChange = { renameFolderText = it },
+                        label = { Text("Folder name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Row {
+                    if (renameFolderText.trim() != saveConflict!!.folderName) {
+                        TextButton(onClick = {
+                            viewModel.confirmSaveRename(context, renameFolderText)
+                        }) { Text("Save As") }
+                    } else {
+                        TextButton(onClick = {
+                            viewModel.confirmSaveOverwrite(context)
+                        }) { Text("Overwrite") }
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelSave() }) { Text("Cancel") }
             }
         )
     }
@@ -249,38 +295,82 @@ fun PreviewScreen(
         )
     }
 
-    // BPM edit dialog
+    // BPM edit dialog — slider + text input + auto-detect
     if (showBpmDialog) {
         var bpmText by remember(idea?.tempoBpm) { mutableStateOf((idea?.tempoBpm ?: 120).toString()) }
+        var bpmSlider by remember(idea?.tempoBpm) { mutableStateOf((idea?.tempoBpm ?: 120).toFloat().coerceIn(20f, 300f)) }
         AlertDialog(
             onDismissRequest = { showBpmDialog = false },
             title = { Text("Tempo (BPM)") },
             text = {
                 Column {
                     Text(
-                        "Changing BPM will affect note durations and regenerate sheet music.",
+                        "Changing BPM re-quantizes note durations to keep audio sync.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    OutlinedTextField(
-                        value = bpmText,
-                        onValueChange = { bpmText = it.filter { c -> c.isDigit() } },
-                        label = { Text("BPM") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    // Quick BPM presets
+                    // Slider + text input combo (like the Window size control)
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = bpmText,
+                            onValueChange = { newVal ->
+                                bpmText = newVal.filter { c -> c.isDigit() }
+                                newVal.filter { c -> c.isDigit() }.toIntOrNull()?.let { v ->
+                                    // Update slider only if within slider range; text can exceed
+                                    if (v in 20..300) bpmSlider = v.toFloat()
+                                }
+                            },
+                            label = { Text("BPM") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.width(90.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Slider(
+                            value = bpmSlider,
+                            onValueChange = { v ->
+                                bpmSlider = v
+                                bpmText = v.toInt().toString()
+                            },
+                            valueRange = 20f..300f,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // Auto-detect button
+                    OutlinedButton(
+                        onClick = {
+                            val detected = viewModel.autoDetectBpm()
+                            if (detected != null) {
+                                bpmText = detected.toString()
+                                bpmSlider = detected.toFloat().coerceIn(20f, 300f)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.AutoFixHigh, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Auto-Detect BPM")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // Quick BPM presets — horizontally scrollable
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         listOf(60, 80, 100, 120, 140).forEach { preset ->
                             FilterChip(
                                 selected = bpmText == preset.toString(),
-                                onClick = { bpmText = preset.toString() },
+                                onClick = {
+                                    bpmText = preset.toString()
+                                    bpmSlider = preset.toFloat()
+                                },
                                 label = { Text(preset.toString()) }
                             )
                         }
@@ -291,7 +381,7 @@ fun PreviewScreen(
                 TextButton(
                     onClick = {
                         bpmText.toIntOrNull()?.let { bpm ->
-                            if (bpm in 20..300) {
+                            if (bpm in 1..999) {
                                 viewModel.updateTempoBpm(bpm)
                                 showBpmDialog = false
                             }
@@ -556,9 +646,9 @@ fun PreviewScreen(
 
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-                            // ── Recording ──
+                            // ── App Settings and Info ──
                             Text(
-                                "Recording",
+                                "App Settings and Info",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)

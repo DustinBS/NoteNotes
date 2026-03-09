@@ -18,5 +18,6 @@ data class MelodyIdea(
     val notes: String? = null,         // JSON-serialized note list
     val deletedAt: Long? = null,       // epoch millis when soft-deleted (null = active)
     val groupId: String? = null,       // UUID grouping key (null = ungrouped)
-    val groupName: String? = null      // user-visible group name
+    val groupName: String? = null,     // user-visible group name
+    val lastOpenedAt: Long? = null     // epoch millis when last opened for preview
 )

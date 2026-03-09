@@ -14,6 +14,10 @@ interface MelodyDao {
     @Query("SELECT * FROM melody_ideas WHERE deletedAt IS NULL ORDER BY createdAt DESC")
     fun getAllIdeas(): Flow<List<MelodyIdea>>
 
+    /** Non-flow snapshot of active ideas (for one-shot reads). */
+    @Query("SELECT * FROM melody_ideas WHERE deletedAt IS NULL ORDER BY createdAt DESC")
+    suspend fun getAllIdeasSnapshot(): List<MelodyIdea>
+
     /** Soft-deleted ideas (trash), most recently deleted first. */
     @Query("SELECT * FROM melody_ideas WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC")
     fun getTrashIdeas(): Flow<List<MelodyIdea>>
@@ -66,4 +70,8 @@ interface MelodyDao {
     /** Rename an idea. */
     @Query("UPDATE melody_ideas SET title = :newTitle WHERE id = :id")
     suspend fun rename(id: Long, newTitle: String)
+
+    /** Update last-opened timestamp for recently-opened sort. */
+    @Query("UPDATE melody_ideas SET lastOpenedAt = :timestamp WHERE id = :id")
+    suspend fun updateLastOpenedAt(id: Long, timestamp: Long)
 }

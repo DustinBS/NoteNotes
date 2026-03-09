@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.NoteNotes" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.NoteNotes" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFBFE</item>
+        <item name="android:navigationBarColor">#FFFBFE</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
 </resources>

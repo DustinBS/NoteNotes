@@ -9,6 +9,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
@@ -95,14 +96,23 @@ fun SheetMusicWebView(
         }
     }
 
+    // Track whether alphaTab has rendered at least once — hide WebView until then
+    // to prevent the brief white flash from the HTML body background.
+    var hasRendered by remember { mutableStateOf(false) }
+
     AndroidView(
-        modifier = modifier,
+        modifier = modifier.then(
+            if (hasRendered) Modifier else Modifier.alpha(0f)
+        ),
         factory = { context ->
             WebView(context).apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
+
+                // Prevent white flash while HTML/JS loads
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
 
                 settings.apply {
                     javaScriptEnabled = true
@@ -131,7 +141,10 @@ fun SheetMusicWebView(
 
                     @JavascriptInterface
                     fun onRenderComplete() {
-                        post { onRenderComplete() }
+                        post {
+                            hasRendered = true
+                            onRenderComplete()
+                        }
                     }
 
                     @JavascriptInterface

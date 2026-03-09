@@ -124,11 +124,11 @@ class MusicXmlParserTest {
         val note1 = result.notes[0]
         // String/fret for chord members (0-based strings in our model)
         // XML has string=4/fret=2, string=3/fret=2, string=2/fret=1
-        // After -1 conversion: (3,2), (2,2), (1,1)
+        // After 6-x conversion: (2,2), (3,2), (4,1)
         assertEquals(3, note1.chordStringFrets.size)
-        assertEquals(Pair(3, 2), note1.chordStringFrets[0])
-        assertEquals(Pair(2, 2), note1.chordStringFrets[1])
-        assertEquals(Pair(1, 1), note1.chordStringFrets[2])
+        assertEquals(Pair(2, 2), note1.chordStringFrets[0])
+        assertEquals(Pair(3, 2), note1.chordStringFrets[1])
+        assertEquals(Pair(4, 1), note1.chordStringFrets[2])
     }
 
     @Test

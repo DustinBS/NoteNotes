@@ -16,6 +16,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,8 +35,16 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,6 +54,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.notenotes.data.AppDatabase
 import com.notenotes.export.NntFile
 import com.notenotes.model.MelodyIdea
+import com.notenotes.model.MusicalNote
 import com.notenotes.model.NntTranscription
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -56,6 +66,21 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+
+// ──────────────────────── Duration Mode ────────────────────────
+
+/** How to resolve duration mismatches between audio and transcription. */
+enum class DurationMode { EXPAND, SHRINK }
+
+/** Format milliseconds as m:ss.SSS (e.g., 1:05.320, 0:30.125). */
+private fun formatDurationMmSs(ms: Long): String {
+    val abMs = ms.coerceAtLeast(0)
+    val totalSec = abMs / 1000
+    val min = totalSec / 60
+    val sec = totalSec % 60
+    val millis = abMs % 1000
+    return "$min:%02d.%03d".format(sec, millis)
+}
 
 // ──────────────────────── Stable Group Colors ────────────────────────
 
@@ -111,7 +136,8 @@ enum class SortMode(val label: String) {
     DATE_DESC("Newest"),
     DATE_ASC("Oldest"),
     TITLE_AZ("A → Z"),
-    TITLE_ZA("Z → A")
+    TITLE_ZA("Z → A"),
+    RECENT("Recent")
 }
 
 // ──────────────────────────── ViewModel ────────────────────────────
@@ -164,6 +190,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun clearSelection() { _selectedIds.value = emptySet() }
+
+    /** Add a single idea to the selection without toggling. Used by drag-to-select. */
+    fun addToSelection(id: Long) {
+        _selectedIds.value = _selectedIds.value + id
+    }
 
     fun selectAll(ideas: List<MelodyIdea>) {
         _selectedIds.value = ideas.map { it.id }.toSet()
@@ -255,6 +286,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { dao.restore(idea.id) }
     }
 
+    /** Update last-opened timestamp for recently-opened sort. */
+    fun updateLastOpenedAt(id: Long) {
+        viewModelScope.launch { dao.updateLastOpenedAt(id, System.currentTimeMillis()) }
+    }
+
     fun permanentlyDeleteIdea(idea: MelodyIdea) {
         viewModelScope.launch {
             dao.delete(idea)
@@ -323,6 +359,307 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** Public version for composable callers. */
     fun getDisplayNamePublic(context: Context, uri: Uri): String = getDisplayName(context, uri)
 
+    /**
+     * Get audio duration in milliseconds from a content URI.
+     * Returns null if duration cannot be determined.
+     */
+    fun getAudioDurationMs(context: Context, uri: Uri): Long? {
+        return try {
+            val retriever = android.media.MediaMetadataRetriever()
+            retriever.setDataSource(context, uri)
+            val durationStr = retriever.extractMetadata(
+                android.media.MediaMetadataRetriever.METADATA_KEY_DURATION
+            )
+            retriever.release()
+            durationStr?.toLongOrNull()
+        } catch (e: Exception) {
+            android.util.Log.w("LibraryVM", "Could not get audio duration", e)
+            null
+        }
+    }
+
+    /**
+     * Get transcription duration in milliseconds from a content URI.
+     * Supports both .nnt and .musicxml files.
+     * Returns null if duration cannot be determined.
+     */
+    fun getTranscriptionDurationMs(context: Context, uri: Uri): Long? {
+        val name = getDisplayName(context, uri)
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return try {
+            when (ext) {
+                NntTranscription.FILE_EXTENSION -> {
+                    val nnt = context.contentResolver.openInputStream(uri)?.use { input ->
+                        NntFile.read(input)
+                    } ?: return null
+                    computeNotesDurationMs(nnt.notes, nnt.tempoBpm)
+                }
+                "musicxml", "xml" -> {
+                    val xml = context.contentResolver.openInputStream(uri)?.use { input ->
+                        input.reader().readText()
+                    } ?: return null
+                    val parser = com.notenotes.export.MusicXmlParser()
+                    val result = parser.parse(xml)
+                    computeNotesDurationMs(result.notes, result.tempoBpm ?: 120)
+                }
+                else -> null
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("LibraryVM", "Could not get transcription duration", e)
+            null
+        }
+    }
+
+    /**
+     * Get the audio duration from an existing idea's file path.
+     */
+    fun getIdeaAudioDurationMs(ideaId: Long): Long? {
+        val idea = kotlinx.coroutines.runBlocking { dao.getIdeaById(ideaId) } ?: return null
+        val path = idea.audioFilePath ?: return null
+        val file = java.io.File(path)
+        if (!file.exists() || file.length() == 0L) return null
+        return try {
+            val retriever = android.media.MediaMetadataRetriever()
+            retriever.setDataSource(file.absolutePath)
+            val durationStr = retriever.extractMetadata(
+                android.media.MediaMetadataRetriever.METADATA_KEY_DURATION
+            )
+            retriever.release()
+            durationStr?.toLongOrNull()
+        } catch (e: Exception) { null }
+    }
+
+    /**
+     * Get the transcription duration from an existing idea's stored notes.
+     */
+    fun getIdeaTranscriptionDurationMs(ideaId: Long): Long? {
+        val idea = kotlinx.coroutines.runBlocking { dao.getIdeaById(ideaId) } ?: return null
+        val notesJson = idea.notes ?: return null
+        return try {
+            val gson = com.google.gson.Gson()
+            val notesType = object : com.google.gson.reflect.TypeToken<List<MusicalNote>>() {}.type
+            val notes: List<MusicalNote> = gson.fromJson(notesJson, notesType)
+            if (notes.isEmpty()) null else computeNotesDurationMs(notes, idea.tempoBpm)
+        } catch (e: Exception) { null }
+    }
+
+    /**
+     * Compute total duration of a note list in milliseconds.
+     * Uses divisions=4: a quarter note = 4 ticks, so ms per tick = 60000 / tempo / 4.
+     *
+     * For manual notes with timePositionMs, uses the actual time span
+     * (from time 0 to end of last note) so leading silence is included.
+     * This matches perceived duration when played back against the audio.
+     */
+    private fun computeNotesDurationMs(notes: List<com.notenotes.model.MusicalNote>, tempoBpm: Int): Long {
+        if (notes.isEmpty()) return 0L
+        val msPerTick = 60000.0 / tempoBpm / 4.0  // divisions = 4
+
+        // Check if notes have timePositionMs (manual notes)
+        val lastNote = notes.last()
+        if (lastNote.timePositionMs != null && lastNote.timePositionMs > 0f) {
+            // Use position-based duration: last note start + its duration
+            val lastNoteEndMs = lastNote.timePositionMs + lastNote.durationTicks * msPerTick
+            return lastNoteEndMs.toLong()
+        }
+
+        // Fallback: sum all ticks (auto-transcribed notes without positions)
+        val totalTicks = notes.sumOf { it.durationTicks }
+        return (totalTicks * msPerTick).toLong()
+    }
+
+    // ── Duration adjustment helpers ──
+
+    /**
+     * Trim a note list so total duration does not exceed [targetMs].
+     * Notes that start beyond the target are dropped entirely.
+     */
+    private fun trimNotesToDuration(
+        notes: List<MusicalNote>, tempoBpm: Int, targetMs: Long
+    ): List<MusicalNote> {
+        if (notes.isEmpty()) return notes
+        val msPerTick = 60000.0 / tempoBpm / 4.0  // divisions = 4
+        var accumulatedMs = 0.0
+        val result = mutableListOf<MusicalNote>()
+        for (note in notes) {
+            val durationMs = note.durationTicks * msPerTick
+            if (accumulatedMs + durationMs <= targetMs + 1) { // +1 for rounding tolerance
+                result.add(note)
+                accumulatedMs += durationMs
+            } else {
+                break
+            }
+        }
+        return result
+    }
+
+    /**
+     * Adjust an audio file to exactly [targetMs] duration.
+     * Decodes to PCM, trims or pads with silence, writes as WAV.
+     * Returns the absolute path of the resulting file (always .wav).
+     */
+    private fun adjustAudioDuration(audioFile: java.io.File, targetMs: Long): String {
+        val extractor = android.media.MediaExtractor()
+        extractor.setDataSource(audioFile.absolutePath)
+
+        var audioTrack = -1
+        for (i in 0 until extractor.trackCount) {
+            val fmt = extractor.getTrackFormat(i)
+            val mime = fmt.getString(android.media.MediaFormat.KEY_MIME)
+            if (mime?.startsWith("audio/") == true) { audioTrack = i; break }
+        }
+        if (audioTrack < 0) { extractor.release(); return audioFile.absolutePath }
+
+        extractor.selectTrack(audioTrack)
+        val format = extractor.getTrackFormat(audioTrack)
+        val mime = format.getString(android.media.MediaFormat.KEY_MIME)
+            ?: run { extractor.release(); return audioFile.absolutePath }
+        val sampleRate = format.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE)
+        val channels = format.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)
+
+        // Decode to PCM
+        val codec = android.media.MediaCodec.createDecoderByType(mime)
+        codec.configure(format, null, null, 0)
+        codec.start()
+
+        val pcmOutput = java.io.ByteArrayOutputStream()
+        val timeoutUs = 10_000L
+        var inputDone = false
+        var outputDone = false
+
+        while (!outputDone) {
+            if (!inputDone) {
+                val inIdx = codec.dequeueInputBuffer(timeoutUs)
+                if (inIdx >= 0) {
+                    val buf = codec.getInputBuffer(inIdx)!!
+                    val sampleSize = extractor.readSampleData(buf, 0)
+                    if (sampleSize < 0) {
+                        codec.queueInputBuffer(inIdx, 0, 0, 0,
+                            android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        inputDone = true
+                    } else {
+                        codec.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
+                        extractor.advance()
+                    }
+                }
+            }
+            val info = android.media.MediaCodec.BufferInfo()
+            val outIdx = codec.dequeueOutputBuffer(info, timeoutUs)
+            if (outIdx >= 0) {
+                if (info.size > 0) {
+                    val outBuf = codec.getOutputBuffer(outIdx)!!
+                    val chunk = ByteArray(info.size)
+                    outBuf.get(chunk)
+                    pcmOutput.write(chunk)
+                }
+                codec.releaseOutputBuffer(outIdx, false)
+                if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                    outputDone = true
+                }
+            }
+        }
+
+        codec.stop(); codec.release(); extractor.release()
+
+        // Calculate target byte count (16-bit PCM)
+        val bytesPerSample = 2 * channels
+        val targetBytes = ((sampleRate.toLong() * targetMs / 1000) * bytesPerSample).toInt()
+        val pcmBytes = pcmOutput.toByteArray()
+
+        val adjustedPcm = when {
+            pcmBytes.size > targetBytes -> pcmBytes.copyOf(targetBytes)
+            pcmBytes.size < targetBytes -> pcmBytes + ByteArray(targetBytes - pcmBytes.size)
+            else -> pcmBytes
+        }
+
+        // Write WAV, possibly changing extension
+        val wavFile = java.io.File(
+            audioFile.parent,
+            audioFile.nameWithoutExtension + ".wav"
+        )
+        writeWavFile(wavFile, adjustedPcm, sampleRate, channels)
+
+        if (wavFile.absolutePath != audioFile.absolutePath) {
+            audioFile.delete()
+        }
+        return wavFile.absolutePath
+    }
+
+    /** Write raw 16-bit PCM data as a standard WAV file. */
+    private fun writeWavFile(
+        file: java.io.File, pcmData: ByteArray, sampleRate: Int, channels: Int
+    ) {
+        val bitsPerSample = 16
+        val byteRate = sampleRate * channels * bitsPerSample / 8
+        val blockAlign = channels * bitsPerSample / 8
+        val dataSize = pcmData.size
+
+        file.outputStream().use { out ->
+            val header = java.nio.ByteBuffer.allocate(44)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            header.put("RIFF".toByteArray(Charsets.US_ASCII))
+            header.putInt(36 + dataSize)
+            header.put("WAVE".toByteArray(Charsets.US_ASCII))
+            header.put("fmt ".toByteArray(Charsets.US_ASCII))
+            header.putInt(16)
+            header.putShort(1) // PCM
+            header.putShort(channels.toShort())
+            header.putInt(sampleRate)
+            header.putInt(byteRate)
+            header.putShort(blockAlign.toShort())
+            header.putShort(bitsPerSample.toShort())
+            header.put("data".toByteArray(Charsets.US_ASCII))
+            header.putInt(dataSize)
+            out.write(header.array())
+            out.write(pcmData)
+        }
+    }
+
+    /**
+     * Apply duration mode adjustment. Both audio and transcription must be present.
+     * Returns a Triple of (adjustedAudioPath, adjustedNotesJson, adjustedTempo).
+     */
+    private fun applyDurationMode(
+        audioFile: java.io.File,
+        notes: List<MusicalNote>,
+        tempoBpm: Int,
+        durationMode: DurationMode
+    ): Triple<String, List<MusicalNote>, Int> {
+        val retriever = android.media.MediaMetadataRetriever()
+        retriever.setDataSource(audioFile.absolutePath)
+        val audioDurMs = retriever.extractMetadata(
+            android.media.MediaMetadataRetriever.METADATA_KEY_DURATION
+        )?.toLongOrNull() ?: 0L
+        retriever.release()
+
+        val transDurMs = computeNotesDurationMs(notes, tempoBpm)
+
+        if (audioDurMs == transDurMs || audioDurMs == 0L || transDurMs == 0L) {
+            return Triple(audioFile.absolutePath, notes, tempoBpm)
+        }
+
+        return when (durationMode) {
+            DurationMode.SHRINK -> {
+                val targetMs = minOf(audioDurMs, transDurMs)
+                val newPath = if (audioDurMs > transDurMs) {
+                    adjustAudioDuration(audioFile, targetMs)
+                } else audioFile.absolutePath
+                val newNotes = if (transDurMs > audioDurMs) {
+                    trimNotesToDuration(notes, tempoBpm, targetMs)
+                } else notes
+                Triple(newPath, newNotes, tempoBpm)
+            }
+            DurationMode.EXPAND -> {
+                val targetMs = maxOf(audioDurMs, transDurMs)
+                val newPath = if (audioDurMs < transDurMs) {
+                    adjustAudioDuration(audioFile, targetMs)
+                } else audioFile.absolutePath
+                // In expand mode, transcription shorter than audio → leave as-is
+                Triple(newPath, notes, tempoBpm)
+            }
+        }
+    }
+
     // ── Duplicate ──
 
     /** Duplicate an idea: copies files and DB row, keeps same group. */
@@ -383,7 +720,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /** Replace the audio and/or MusicXML files of an existing idea. */
-    fun replaceIdeaFiles(context: Context, ideaId: Long, audioUri: Uri?, xmlUri: Uri?) {
+    fun replaceIdeaFiles(context: Context, ideaId: Long, audioUri: Uri?, xmlUri: Uri?, durationMode: DurationMode? = null) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val idea = dao.getIdeaById(ideaId) ?: return@launch
@@ -434,8 +771,37 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                             dest.outputStream().use { output -> input.copyTo(output) }
                         }
                         newXmlPath = dest.absolutePath
-                        newNotes = null  // force re-parse from XML on next load
+
+                        if (durationMode != null) {
+                            // Duration adjustment needs notes now — parse XML eagerly
+                            val xml = dest.readText()
+                            val parser = com.notenotes.export.MusicXmlParser()
+                            val result = parser.parse(xml, newTempo)
+                            val gson = com.google.gson.Gson()
+                            newNotes = gson.toJson(result.notes)
+                            result.instrument?.let { newInstrument = it }
+                            result.tempoBpm?.let { newTempo = it }
+                            result.keySignature?.let { newKey = it }
+                            result.timeSignature?.let { newTime = it }
+                        } else {
+                            newNotes = null  // force re-parse from XML on next load
+                        }
                     }
+                }
+
+                // ── Apply duration adjustment if both audio and transcription are present ──
+                if (durationMode != null && newAudioPath != null && newNotes != null) {
+                    val gson = com.google.gson.Gson()
+                    val noteList = gson.fromJson(
+                        newNotes,
+                        Array<MusicalNote>::class.java
+                    ).toList()
+                    val audioFile = java.io.File(newAudioPath)
+                    val (adjPath, adjNotes, _) = applyDurationMode(
+                        audioFile, noteList, newTempo, durationMode
+                    )
+                    newAudioPath = adjPath
+                    newNotes = gson.toJson(adjNotes)
                 }
 
                 val updated = idea.copy(
@@ -458,7 +824,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /** Build a new idea from user-provided audio (required) and optional transcription file. */
-    fun buildIdea(context: Context, audioUri: Uri, xmlUri: Uri?, onDone: (Long) -> Unit) {
+    fun buildIdea(context: Context, audioUri: Uri, xmlUri: Uri?, durationMode: DurationMode? = null, onDone: (Long) -> Unit) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val audioDir = java.io.File(context.filesDir, "audio")
@@ -505,13 +871,41 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                             xmlDest.outputStream().use { output -> input.copyTo(output) }
                         }
                         xmlPath = xmlDest.absolutePath
+
+                        if (durationMode != null) {
+                            // Duration adjustment needs notes now — parse XML eagerly
+                            val xml = xmlDest.readText()
+                            val parser = com.notenotes.export.MusicXmlParser()
+                            val result = parser.parse(xml, tempoBpm)
+                            val gson = com.google.gson.Gson()
+                            notes = gson.toJson(result.notes)
+                            result.instrument?.let { instrument = it }
+                            result.tempoBpm?.let { tempoBpm = it }
+                            result.keySignature?.let { keySignature = it }
+                            result.timeSignature?.let { timeSignature = it }
+                        }
                     }
+                }
+
+                // ── Apply duration adjustment if both audio and transcription are present ──
+                var finalAudioPath = audioDest.absolutePath
+                if (durationMode != null && notes != null) {
+                    val gson = com.google.gson.Gson()
+                    val noteList = gson.fromJson(
+                        notes,
+                        Array<MusicalNote>::class.java
+                    ).toList()
+                    val (adjPath, adjNotes, _) = applyDurationMode(
+                        audioDest, noteList, tempoBpm, durationMode
+                    )
+                    finalAudioPath = adjPath
+                    notes = gson.toJson(adjNotes)
                 }
 
                 val idea = MelodyIdea(
                     title = title,
                     createdAt = ts,
-                    audioFilePath = audioDest.absolutePath,
+                    audioFilePath = finalAudioPath,
                     musicXmlFilePath = xmlPath,
                     notes = notes,
                     instrument = instrument,
@@ -639,17 +1033,13 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /** Import a .notenotes.zip snapshot — extracts audio, musicxml, midi and metadata. */
+    /**
+     * Import a ZIP snapshot — handles both single-idea ZIPs (flat: metadata.json, audio.wav …)
+     * and multi-idea ZIPs (sub-folders: IdeaTitle/metadata.json, IdeaTitle/audio.wav …).
+     */
     private suspend fun importSnapshot(context: Context, zipUri: Uri, onDone: (Long) -> Unit) {
         val audioDir = java.io.File(context.filesDir, "audio")
         audioDir.mkdirs()
-        val ts = System.currentTimeMillis()
-
-        var audioPath: String? = null
-        var xmlPath: String? = null
-        var midiPath: String? = null
-        var metaJson: String? = null
-        var entriesRead = 0
 
         val inputStream = context.contentResolver.openInputStream(zipUri)
         if (inputStream == null) {
@@ -660,38 +1050,23 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
+        // ── First pass: group entries by subfolder ("" = root) ──
+        data class ZipBlob(val name: String, val bytes: ByteArray)
+        val buckets = mutableMapOf<String, MutableList<ZipBlob>>()
+
         inputStream.use { input ->
             java.util.zip.ZipInputStream(input).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
-                    val entryName = entry.name
-                    android.util.Log.d("LibraryVM", "ZIP entry: $entryName (size=${entry.size})")
-                    entriesRead++
-                    when {
-                        entryName == "metadata.json" -> {
-                            metaJson = zis.readBytes().toString(Charsets.UTF_8)
+                    if (!entry.isDirectory) {
+                        val fullName = entry.name
+                        val slashIdx = fullName.indexOf('/')
+                        val (bucket, leaf) = if (slashIdx > 0) {
+                            fullName.substring(0, slashIdx) to fullName.substring(slashIdx + 1)
+                        } else {
+                            "" to fullName
                         }
-                        entryName.startsWith("audio.") -> {
-                            val ext = entryName.substringAfterLast('.', "wav")
-                            val dest = java.io.File(audioDir, "import_${ts}.$ext")
-                            dest.outputStream().use { out -> zis.copyTo(out) }
-                            audioPath = dest.absolutePath
-                        }
-                        entryName.endsWith(".${NntTranscription.FILE_EXTENSION}") -> {
-                            // NNT transcription in ZIP — notes will be applied from
-                            // metadata.json which already has the full notes JSON
-                            // (this entry exists for standalone extraction)
-                        }
-                        entryName.endsWith(".musicxml") -> {
-                            val dest = java.io.File(audioDir, "import_${ts}.musicxml")
-                            dest.outputStream().use { out -> zis.copyTo(out) }
-                            xmlPath = dest.absolutePath
-                        }
-                        entryName.endsWith(".mid") -> {
-                            val dest = java.io.File(audioDir, "import_${ts}.mid")
-                            dest.outputStream().use { out -> zis.copyTo(out) }
-                            midiPath = dest.absolutePath
-                        }
+                        buckets.getOrPut(bucket) { mutableListOf() }.add(ZipBlob(leaf, zis.readBytes()))
                     }
                     zis.closeEntry()
                     entry = zis.nextEntry
@@ -699,44 +1074,196 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        android.util.Log.d("LibraryVM", "ZIP import: entries=$entriesRead, meta=${metaJson != null}, audio=$audioPath, xml=$xmlPath, midi=$midiPath")
-
-        if (entriesRead == 0) {
-            android.util.Log.e("LibraryVM", "ZIP contained no entries")
+        if (buckets.isEmpty()) {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                 android.widget.Toast.makeText(context, "ZIP file appears empty", android.widget.Toast.LENGTH_SHORT).show()
             }
             return
         }
 
-        // Parse metadata
+        // Determine if this is a single flat snapshot or a multi-idea package.
+        // Single snapshots have entries in the root bucket (""): metadata.json, audio.wav, …
+        val isSingle = buckets.containsKey("") && buckets[""]!!.any { it.name == "metadata.json" }
+        val groups: Collection<List<ZipBlob>> = if (isSingle) listOf(buckets[""]!!) else buckets.values
+
         val gson = com.google.gson.Gson()
-        val meta: Map<String, Any?> = if (metaJson != null) {
-            gson.fromJson(metaJson, object : com.google.gson.reflect.TypeToken<Map<String, Any?>>() {}.type)
-        } else emptyMap()
+        var importedCount = 0
+        var lastId: Long = -1
 
-        val title = (meta["title"] as? String) ?: "Imported Snapshot"
-        val finalAudioPath = audioPath ?: java.io.File(audioDir, "import_${ts}_placeholder.wav").also {
-            it.createNewFile()
-        }.absolutePath
+        for (blobs in groups) {
+            val ts = System.currentTimeMillis() + importedCount  // unique timestamp per idea
+            var audioPath: String? = null
+            var xmlPath: String? = null
+            var midiPath: String? = null
+            var metaJson: String? = null
 
-        val idea = com.notenotes.model.MelodyIdea(
-            title = title,
-            createdAt = ts,
-            audioFilePath = finalAudioPath,
-            musicXmlFilePath = xmlPath,
-            midiFilePath = midiPath,
-            instrument = (meta["instrument"] as? String) ?: "piano",
-            tempoBpm = (meta["tempoBpm"] as? Number)?.toInt() ?: 120,
-            keySignature = meta["keySignature"] as? String,
-            timeSignature = meta["timeSignature"] as? String,
-            notes = meta["notes"] as? String,
-            groupId = meta["groupId"] as? String,
-            groupName = meta["groupName"] as? String
-        )
-        val newId = dao.insert(idea)
+            for (blob in blobs) {
+                when {
+                    blob.name == "metadata.json" -> metaJson = blob.bytes.toString(Charsets.UTF_8)
+                    blob.name.startsWith("audio.") -> {
+                        val ext = blob.name.substringAfterLast('.', "wav")
+                        val dest = java.io.File(audioDir, "import_${ts}.$ext")
+                        dest.writeBytes(blob.bytes)
+                        audioPath = dest.absolutePath
+                    }
+                    blob.name.endsWith(".musicxml") -> {
+                        val dest = java.io.File(audioDir, "import_${ts}.musicxml")
+                        dest.writeBytes(blob.bytes)
+                        xmlPath = dest.absolutePath
+                    }
+                    blob.name.endsWith(".mid") -> {
+                        val dest = java.io.File(audioDir, "import_${ts}.mid")
+                        dest.writeBytes(blob.bytes)
+                        midiPath = dest.absolutePath
+                    }
+                    // .nnt entries — notes are already in metadata.json
+                }
+            }
+
+            val meta: Map<String, Any?> = if (metaJson != null) {
+                gson.fromJson(metaJson, object : com.google.gson.reflect.TypeToken<Map<String, Any?>>() {}.type)
+            } else emptyMap()
+
+            val title = (meta["title"] as? String) ?: "Imported Snapshot"
+            val finalAudioPath = audioPath ?: java.io.File(audioDir, "import_${ts}_placeholder.wav").also {
+                it.createNewFile()
+            }.absolutePath
+
+            val idea = com.notenotes.model.MelodyIdea(
+                title = title,
+                createdAt = ts,
+                audioFilePath = finalAudioPath,
+                musicXmlFilePath = xmlPath,
+                midiFilePath = midiPath,
+                instrument = (meta["instrument"] as? String) ?: "piano",
+                tempoBpm = (meta["tempoBpm"] as? Number)?.toInt() ?: 120,
+                keySignature = meta["keySignature"] as? String,
+                timeSignature = meta["timeSignature"] as? String,
+                notes = meta["notes"] as? String,
+                groupId = meta["groupId"] as? String,
+                groupName = meta["groupName"] as? String
+            )
+            lastId = dao.insert(idea)
+            importedCount++
+        }
+
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-            onDone(newId)
+            if (importedCount > 1) {
+                android.widget.Toast.makeText(context, "Imported $importedCount ideas", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                onDone(lastId)
+            }
+        }
+    }
+
+    /** Create a ZIP containing snapshot ZIPs for every selected idea, then share it. */
+    fun zipSelectedIdeas(context: Context) {
+        val ids = _selectedIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val allIdeas = dao.getAllIdeasSnapshot()
+                val selected = allIdeas.filter { it.id in ids }
+                if (selected.isEmpty()) return@launch
+
+                val dir = java.io.File(context.filesDir, "exports")
+                dir.mkdirs()
+                val ts = System.currentTimeMillis()
+                val zipFile = java.io.File(dir, "NoteNotes_${selected.size}_ideas_$ts.zip")
+
+                val gson = com.google.gson.Gson()
+                java.util.zip.ZipOutputStream(zipFile.outputStream()).use { zos ->
+                    selected.forEach { idea ->
+                        val prefix = "${idea.title.replace(Regex("[^a-zA-Z0-9._\\- ]"), "_")}/"
+
+                        // metadata.json
+                        val meta = mutableMapOf<String, Any?>()
+                        meta["title"] = idea.title
+                        meta["instrument"] = idea.instrument
+                        meta["tempoBpm"] = idea.tempoBpm
+                        meta["keySignature"] = idea.keySignature
+                        meta["timeSignature"] = idea.timeSignature
+                        meta["notes"] = idea.notes
+                        meta["groupId"] = idea.groupId
+                        meta["groupName"] = idea.groupName
+                        meta["createdAt"] = idea.createdAt
+
+                        zos.putNextEntry(java.util.zip.ZipEntry("${prefix}metadata.json"))
+                        zos.write(gson.toJson(meta).toByteArray())
+                        zos.closeEntry()
+
+                        // Audio
+                        idea.audioFilePath?.let { path ->
+                            val audio = java.io.File(path)
+                            if (audio.exists()) {
+                                val ext = audio.extension.ifEmpty { "wav" }
+                                zos.putNextEntry(java.util.zip.ZipEntry("${prefix}audio.$ext"))
+                                audio.inputStream().use { it.copyTo(zos) }
+                                zos.closeEntry()
+                            }
+                        }
+
+                        // MIDI
+                        idea.midiFilePath?.let { path ->
+                            val f = java.io.File(path)
+                            if (f.exists()) {
+                                zos.putNextEntry(java.util.zip.ZipEntry("${prefix}melody.mid"))
+                                f.inputStream().use { it.copyTo(zos) }
+                                zos.closeEntry()
+                            }
+                        }
+
+                        // MusicXML
+                        idea.musicXmlFilePath?.let { path ->
+                            val f = java.io.File(path)
+                            if (f.exists()) {
+                                zos.putNextEntry(java.util.zip.ZipEntry("${prefix}melody.musicxml"))
+                                f.inputStream().use { it.copyTo(zos) }
+                                zos.closeEntry()
+                            }
+                        }
+
+                        // NNT transcription from notes JSON
+                        idea.notes?.let { notesJson ->
+                            val nnt = NntFile.fromNotesJson(
+                                notesJson,
+                                instrument = idea.instrument,
+                                tempoBpm = idea.tempoBpm,
+                                keySignature = idea.keySignature,
+                                timeSignature = idea.timeSignature
+                            )
+                            if (nnt != null) {
+                                zos.putNextEntry(java.util.zip.ZipEntry("${prefix}melody.${NntTranscription.FILE_EXTENSION}"))
+                                zos.write(NntFile.toJson(nnt).toByteArray())
+                                zos.closeEntry()
+                            }
+                        }
+                    }
+                }
+
+                // Share the ZIP
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context, "${context.packageName}.fileprovider", zipFile
+                )
+                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    context.startActivity(
+                        android.content.Intent.createChooser(intent, "Share ${selected.size} Ideas")
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
+                _selectedIds.value = emptySet()
+            } catch (e: Exception) {
+                android.util.Log.e("LibraryVM", "zipSelectedIdeas: Error", e)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Zip failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 }
@@ -759,6 +1286,16 @@ fun LibraryScreen(
     val sortMode by viewModel.sortMode.collectAsState()
     val colorOverrides by viewModel.groupColorOverrides.collectAsState()
     val haptic = LocalHapticFeedback.current
+
+    // Scroll to top only when sort mode actually changes (not on re-composition after nav back)
+    val listState = rememberLazyListState()
+    var previousSortMode by remember { mutableStateOf(sortMode) }
+    LaunchedEffect(sortMode) {
+        if (sortMode != previousSortMode) {
+            previousSortMode = sortMode
+            listState.animateScrollToItem(0)
+        }
+    }
 
     // ── Import file picker ──
     val importLauncher = rememberLauncherForActivityResult(
@@ -847,6 +1384,7 @@ fun LibraryScreen(
             SortMode.DATE_ASC -> base.sortedBy { it.createdAt }
             SortMode.TITLE_AZ -> base.sortedBy { it.title.lowercase() }
             SortMode.TITLE_ZA -> base.sortedByDescending { it.title.lowercase() }
+            SortMode.RECENT -> base.sortedByDescending { it.lastOpenedAt ?: 0L }
         }
     }
 
@@ -916,6 +1454,38 @@ fun LibraryScreen(
 
     // ── Edit Files dialog ──
     if (editFilesTargetId != null) {
+        var editDurationMode by remember { mutableStateOf(DurationMode.EXPAND) }
+        val editAudioDurationMs = remember(editAudioUri) {
+            editAudioUri?.let { viewModel.getAudioDurationMs(context, it) }
+        }
+        val editTransDurationMs = remember(editXmlUri) {
+            editXmlUri?.let { viewModel.getTranscriptionDurationMs(context, it) }
+        }
+        // Existing idea durations (fallbacks when only one side is replaced)
+        val existingAudioMs = remember(editFilesTargetId) {
+            editFilesTargetId?.let { viewModel.getIdeaAudioDurationMs(it) }
+        }
+        val existingTransMs = remember(editFilesTargetId) {
+            editFilesTargetId?.let { viewModel.getIdeaTranscriptionDurationMs(it) }
+        }
+
+        // Effective durations: newly picked file overrides existing
+        val effectiveAudioMs = editAudioDurationMs ?: existingAudioMs
+        val effectiveTransMs = editTransDurationMs ?: existingTransMs
+        val hasFileSelected = editAudioUri != null || editXmlUri != null
+        val editDurationsDiffer = hasFileSelected
+                && effectiveAudioMs != null && effectiveTransMs != null
+                && effectiveAudioMs != effectiveTransMs
+
+        // Validate transcription file extension
+        val editTransValid = remember(editXmlName) {
+            if (editXmlName == null) true
+            else {
+                val ext = editXmlName!!.substringAfterLast('.', "").lowercase()
+                ext in listOf("nnt", "musicxml", "xml")
+            }
+        }
+
         AlertDialog(
             onDismissRequest = {
                 editFilesTargetId = null; editAudioUri = null; editAudioName = null
@@ -925,7 +1495,7 @@ fun LibraryScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Replace the audio or transcription files for this idea.",
+                        "Optionally replace the audio or transcription files for this idea.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -936,29 +1506,116 @@ fun LibraryScreen(
                     ) {
                         Icon(Icons.Filled.AudioFile, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(editAudioName ?: "Select Audio File (optional)")
+                        Text(editAudioName ?: "Select Audio (.wav, .mp3, .m4a)")
                     }
-                    // XML file picker
+                    // Transcription file picker
                     OutlinedButton(
                         onClick = { editXmlPicker.launch(arrayOf("*/*")) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Filled.Description, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(editXmlName ?: "Select Transcription File (optional)")
+                        Text(editXmlName ?: "Select Transcription (.nnt, .musicxml)")
+                    }
+                    // Show error for unsupported transcription file
+                    if (!editTransValid) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                "\u274C $editXmlName — unsupported format. Use .nnt or .musicxml",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+
+                    // Duration mismatch section
+                    if (editDurationsDiffer) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Filled.Warning, null,
+                                tint = Color(0xFFF9A825),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "Duration Mismatch",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color(0xFFF9A825)
+                            )
+                        }
+                        Text(
+                            "Audio: ${formatDurationMmSs(effectiveAudioMs!!)}  •  Transcription: ${formatDurationMmSs(effectiveTransMs!!)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFF9A825)
+                        )
+
+                        // Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = editDurationMode == DurationMode.EXPAND,
+                                onClick = { editDurationMode = DurationMode.EXPAND },
+                                label = { Text("Expand to longest") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = editDurationMode == DurationMode.SHRINK,
+                                onClick = { editDurationMode = DurationMode.SHRINK },
+                                label = { Text("Shrink to shortest") },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        // Look-ahead summary
+                        val shorterMs = minOf(effectiveAudioMs, effectiveTransMs)
+                        val audioIsLonger = effectiveAudioMs > effectiveTransMs
+                        val audioLabel = editAudioName?.substringAfterLast('.', "audio") ?: "audio"
+                        val transLabel = editXmlName?.substringAfterLast('.', "transcription")
+                            ?: if (existingTransMs != null) "transcription" else "transcription"
+
+                        val summary = if (editDurationMode == DurationMode.SHRINK) {
+                            if (audioIsLonger) {
+                                "A copy of the audio will be trimmed from ${formatDurationMmSs(effectiveAudioMs)} to ${formatDurationMmSs(shorterMs)} to match the transcription. Original files are not modified."
+                            } else {
+                                "A copy of the transcription will be trimmed from ${formatDurationMmSs(effectiveTransMs)} to ${formatDurationMmSs(shorterMs)} to match the audio. Original files are not modified."
+                            }
+                        } else {
+                            if (audioIsLonger) {
+                                "The transcription ends at ${formatDurationMmSs(effectiveTransMs)}. The remaining audio until ${formatDurationMmSs(effectiveAudioMs)} will have no transcription. Original files are not modified."
+                            } else {
+                                "The audio ends at ${formatDurationMmSs(effectiveAudioMs)}. A copy with silent padding will be created up to ${formatDurationMmSs(effectiveTransMs)} so the full transcription is playable. Original files are not modified."
+                            }
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
                     }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
+                        val mode = if (editDurationsDiffer) editDurationMode else null
                         editFilesTargetId?.let { id ->
-                            viewModel.replaceIdeaFiles(context, id, editAudioUri, editXmlUri)
+                            viewModel.replaceIdeaFiles(context, id, editAudioUri, editXmlUri, mode)
                         }
                         editFilesTargetId = null; editAudioUri = null; editAudioName = null
                         editXmlUri = null; editXmlName = null
                     },
-                    enabled = editAudioUri != null || editXmlUri != null
+                    enabled = (editAudioUri != null || editXmlUri != null) && editTransValid
                 ) { Text("Replace") }
             },
             dismissButton = {
@@ -972,6 +1629,26 @@ fun LibraryScreen(
 
     // ── Build Idea dialog ──
     if (showBuildDialog) {
+        var buildDurationMode by remember { mutableStateOf(DurationMode.EXPAND) }
+        val buildAudioDurationMs = remember(buildAudioUri) {
+            buildAudioUri?.let { viewModel.getAudioDurationMs(context, it) }
+        }
+        val buildTransDurationMs = remember(buildXmlUri) {
+            buildXmlUri?.let { viewModel.getTranscriptionDurationMs(context, it) }
+        }
+        val buildBothSelected = buildAudioUri != null && buildXmlUri != null
+        val buildDurationsDiffer = buildBothSelected && buildAudioDurationMs != null && buildTransDurationMs != null
+                && buildAudioDurationMs != buildTransDurationMs
+
+        // Validate transcription file extension
+        val buildTransValid = remember(buildXmlName) {
+            if (buildXmlName == null) true
+            else {
+                val ext = buildXmlName!!.substringAfterLast('.', "").lowercase()
+                ext in listOf("nnt", "musicxml", "xml")
+            }
+        }
+
         AlertDialog(
             onDismissRequest = {
                 showBuildDialog = false; buildAudioUri = null; buildAudioName = null
@@ -992,45 +1669,127 @@ fun LibraryScreen(
                     ) {
                         Icon(Icons.Filled.AudioFile, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(buildAudioName ?: "Select Audio File *")
+                        Text(buildAudioName ?: "Select Audio (.wav, .mp3, .m4a) *")
                     }
                     if (buildAudioName != null) {
                         Text(
-                            "\u2713 ${buildAudioName}",
+                            "\u2705 ${buildAudioName}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                    // XML file picker (optional)
+                    // Transcription file picker (optional)
                     OutlinedButton(
                         onClick = { buildXmlPicker.launch(arrayOf("*/*")) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Filled.Description, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(buildXmlName ?: "Select Transcription (optional)")
+                        Text(buildXmlName ?: "Select Transcription (.nnt, .musicxml)")
                     }
-                    if (buildXmlName != null) {
+                    if (buildXmlName != null && buildTransValid) {
                         Text(
-                            "\u2713 ${buildXmlName}",
+                            "\u2705 ${buildXmlName}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary
                         )
+                    }
+                    // Show error for unsupported transcription file
+                    if (!buildTransValid) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                "\u274C $buildXmlName — unsupported format. Use .nnt or .musicxml",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+
+                    // Duration mismatch section
+                    if (buildDurationsDiffer) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Filled.Warning, null,
+                                tint = Color(0xFFF9A825),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "Duration Mismatch",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color(0xFFF9A825)
+                            )
+                        }
+                        Text(
+                            "Audio: ${formatDurationMmSs(buildAudioDurationMs!!)}  •  Transcription: ${formatDurationMmSs(buildTransDurationMs!!)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFF9A825)
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = buildDurationMode == DurationMode.EXPAND,
+                                onClick = { buildDurationMode = DurationMode.EXPAND },
+                                label = { Text("Expand to longest") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = buildDurationMode == DurationMode.SHRINK,
+                                onClick = { buildDurationMode = DurationMode.SHRINK },
+                                label = { Text("Shrink to shortest") },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        val shorterMs = minOf(buildAudioDurationMs, buildTransDurationMs)
+                        val audioIsLonger = buildAudioDurationMs > buildTransDurationMs
+
+                        val summary = if (buildDurationMode == DurationMode.SHRINK) {
+                            if (audioIsLonger) {
+                                "A copy of the audio will be trimmed from ${formatDurationMmSs(buildAudioDurationMs)} to ${formatDurationMmSs(shorterMs)} to match the transcription. Original files are not modified."
+                            } else {
+                                "A copy of the transcription will be trimmed from ${formatDurationMmSs(buildTransDurationMs)} to ${formatDurationMmSs(shorterMs)} to match the audio. Original files are not modified."
+                            }
+                        } else {
+                            if (audioIsLonger) {
+                                "The transcription ends at ${formatDurationMmSs(buildTransDurationMs)}. The remaining audio until ${formatDurationMmSs(buildAudioDurationMs)} will have no transcription. Original files are not modified."
+                            } else {
+                                "The audio ends at ${formatDurationMmSs(buildAudioDurationMs)}. A copy with silent padding will be created up to ${formatDurationMmSs(buildTransDurationMs)} so the full transcription is playable. Original files are not modified."
+                            }
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
                     }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
+                        val mode = if (buildDurationsDiffer) buildDurationMode else null
                         buildAudioUri?.let { audioUri ->
-                            viewModel.buildIdea(context, audioUri, buildXmlUri) { newId ->
+                            viewModel.buildIdea(context, audioUri, buildXmlUri, mode) { newId ->
                                 onNavigateToPreview(newId)
                             }
                         }
                         showBuildDialog = false; buildAudioUri = null; buildAudioName = null
                         buildXmlUri = null; buildXmlName = null
                     },
-                    enabled = buildAudioUri != null
+                    enabled = buildAudioUri != null && buildTransValid
                 ) { Text("Build") }
             },
             dismissButton = {
@@ -1071,29 +1830,43 @@ fun LibraryScreen(
             if (selectedIds.isNotEmpty()) {
                 // Selection mode top bar
                 TopAppBar(
-                    title = { Text("${selectedIds.size} selected") },
+                    title = { Text("${selectedIds.size} selected", style = MaterialTheme.typography.titleSmall) },
                     navigationIcon = {
                         IconButton(onClick = { viewModel.clearSelection() }) {
                             Icon(Icons.Filled.Close, contentDescription = "Cancel")
                         }
                     },
                     actions = {
-                        IconButton(onClick = { viewModel.selectAll(filteredIdeas) }) {
-                            Icon(Icons.Filled.SelectAll, contentDescription = "Select All")
-                        }
-                        IconButton(onClick = { showGroupDialog = true }) {
-                            Icon(Icons.Filled.CreateNewFolder, contentDescription = "New Group")
+                        IconButton(onClick = { viewModel.selectAll(filteredIdeas) }, modifier = Modifier.size(48.dp)) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Filled.SelectAll, contentDescription = "Select All", modifier = Modifier.size(20.dp))
+                                Text("All", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                            }
                         }
                         if (availableGroups.isNotEmpty()) {
                             IconButton(onClick = {
                                 moveToGroupTargetId = null
                                 showMoveToGroupSheet = true
-                            }) {
-                                Icon(Icons.Filled.DriveFileMove, contentDescription = "Move to Group")
+                            }, modifier = Modifier.size(48.dp)) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Filled.DriveFileMove, contentDescription = "Move to Group", modifier = Modifier.size(20.dp))
+                                    Text("Move", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                                }
                             }
                         }
-                        IconButton(onClick = { viewModel.softDeleteSelected() }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete Selected")
+                        IconButton(onClick = { viewModel.softDeleteSelected() }, modifier = Modifier.size(48.dp)) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Trash", modifier = Modifier.size(20.dp))
+                                Text("Trash", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                            }
+                        }
+                        IconButton(onClick = {
+                            viewModel.zipSelectedIdeas(viewModel.getApplication<Application>())
+                        }, modifier = Modifier.size(48.dp)) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Filled.FolderZip, contentDescription = "Zip", modifier = Modifier.size(20.dp))
+                                Text("Zip", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                            }
                         }
                     }
                 )
@@ -1116,11 +1889,11 @@ fun LibraryScreen(
                                 }
                             }
                             IconButton(onClick = {
-                                importLauncher.launch(arrayOf("*/*"))
+                                importLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
                             }) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(Icons.Filled.FileOpen, contentDescription = "Import", modifier = Modifier.size(20.dp))
-                                    Text("Import", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                                    Icon(Icons.Filled.FolderZip, contentDescription = "Unzip", modifier = Modifier.size(20.dp))
+                                    Text("Unzip", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
                                 }
                             }
                             IconButton(
@@ -1213,23 +1986,56 @@ fun LibraryScreen(
                         singleLine = true
                     )
 
-                    // Sort chips
+                    // Sort chips — Date and Title toggle direction on click
                     Row(
                         modifier = Modifier
                             .horizontalScroll(rememberScrollState())
                             .padding(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        SortMode.entries.forEach { mode ->
-                            FilterChip(
-                                selected = sortMode == mode,
-                                onClick = { viewModel.setSortMode(mode) },
-                                label = { Text(mode.label) },
-                                leadingIcon = if (sortMode == mode) {
-                                    { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
-                                } else null
-                            )
-                        }
+                        // Date toggle: Newest ↔ Oldest
+                        val isDateSort = sortMode == SortMode.DATE_DESC || sortMode == SortMode.DATE_ASC
+                        val dateLabel = if (sortMode == SortMode.DATE_ASC) "Oldest" else "Newest"
+                        FilterChip(
+                            selected = isDateSort,
+                            onClick = {
+                                viewModel.setSortMode(
+                                    if (sortMode == SortMode.DATE_DESC) SortMode.DATE_ASC
+                                    else SortMode.DATE_DESC
+                                )
+                            },
+                            label = { Text(dateLabel) },
+                            leadingIcon = if (isDateSort) {
+                                { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+                            } else null
+                        )
+
+                        // Title toggle: A→Z ↔ Z→A
+                        val isTitleSort = sortMode == SortMode.TITLE_AZ || sortMode == SortMode.TITLE_ZA
+                        val titleLabel = if (sortMode == SortMode.TITLE_ZA) "Z → A" else "A → Z"
+                        FilterChip(
+                            selected = isTitleSort,
+                            onClick = {
+                                viewModel.setSortMode(
+                                    if (sortMode == SortMode.TITLE_AZ) SortMode.TITLE_ZA
+                                    else SortMode.TITLE_AZ
+                                )
+                            },
+                            label = { Text(titleLabel) },
+                            leadingIcon = if (isTitleSort) {
+                                { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+                            } else null
+                        )
+
+                        // Recent
+                        FilterChip(
+                            selected = sortMode == SortMode.RECENT,
+                            onClick = { viewModel.setSortMode(SortMode.RECENT) },
+                            label = { Text("Recent") },
+                            leadingIcon = if (sortMode == SortMode.RECENT) {
+                                { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+                            } else null
+                        )
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                 }
@@ -1241,11 +2047,86 @@ fun LibraryScreen(
                         subtitle = if (searchQuery.isBlank()) "Record your first melody!" else null
                     )
                 } else {
+                    // Drag-to-select: when in selection mode, dragging across items selects them
+                    var isDragSelecting by remember { mutableStateOf(false) }
+                    val isSelectMode = selectedIds.isNotEmpty()
+
                     LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(if (isSelectMode) {
+                                Modifier.pointerInput(Unit) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(pass = PointerEventPass.Initial)
+                                        var totalDrag = 0f
+                                        var dragActive = false
+
+                                        while (true) {
+                                            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                            if (!change.pressed) break
+
+                                            totalDrag += abs(change.positionChange().y)
+                                            if (totalDrag > viewConfiguration.touchSlop && !dragActive) {
+                                                dragActive = true
+                                                isDragSelecting = true
+                                            }
+
+                                            if (dragActive) {
+                                                change.consume()
+                                                // Find item at current Y and add to selection
+                                                val y = change.position.y
+                                                val hitItem = listState.layoutInfo.visibleItemsInfo.find { item ->
+                                                    y >= item.offset && y < item.offset + item.size
+                                                }
+                                                val hitKey = hitItem?.key
+                                                if (hitKey is Long) {
+                                                    viewModel.addToSelection(hitKey)
+                                                }
+                                            }
+                                        }
+                                        isDragSelecting = false
+                                    }
+                                }
+                            } else Modifier),
+                        userScrollEnabled = !isDragSelecting,
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        if (sortMode == SortMode.RECENT) {
+                            // Flat list — no group headers, show "groupName / title"
+                            items(filteredIdeas, key = { it.id }) { idea ->
+                                IdeaCard(
+                                    idea = idea,
+                                    isSelected = idea.id in selectedIds,
+                                    isSelecting = selectedIds.isNotEmpty(),
+                                    accentColor = idea.groupId?.let { groupColor(it, colorOverrides) },
+                                    availableGroups = availableGroups,
+                                    groupPrefix = idea.groupName,
+                                    onClick = {
+                                        if (selectedIds.isNotEmpty()) viewModel.toggleSelection(idea.id)
+                                        else {
+                                            viewModel.updateLastOpenedAt(idea.id)
+                                            onNavigateToPreview(idea.id)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.toggleSelection(idea.id)
+                                    },
+                                    onDelete = { viewModel.softDeleteIdea(idea) },
+                                    onRename = { newTitle -> viewModel.renameIdea(idea.id, newTitle) },
+                                    onDuplicate = { viewModel.duplicateIdea(idea) },
+                                    onEditFiles = { editFilesTargetId = idea.id },
+                                    onRemoveFromGroup = if (idea.groupId != null) {{ viewModel.removeFromGroup(idea.id) }} else null,
+                                    onMoveToGroup = {
+                                        moveToGroupTargetId = idea.id
+                                        showMoveToGroupSheet = true
+                                    }
+                                )
+                            }
+                        } else {
                         // Grouped ideas
                         grouped.forEach { (groupId, groupIdeas) ->
                             val groupName = groupIdeas.firstOrNull()?.groupName ?: "Group"
@@ -1274,7 +2155,10 @@ fun LibraryScreen(
                                         availableGroups = availableGroups,
                                         onClick = {
                                             if (selectedIds.isNotEmpty()) viewModel.toggleSelection(idea.id)
-                                            else onNavigateToPreview(idea.id)
+                                            else {
+                                                viewModel.updateLastOpenedAt(idea.id)
+                                                onNavigateToPreview(idea.id)
+                                            }
                                         },
                                         onLongClick = {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1314,7 +2198,10 @@ fun LibraryScreen(
                                 availableGroups = availableGroups,
                                 onClick = {
                                     if (selectedIds.isNotEmpty()) viewModel.toggleSelection(idea.id)
-                                    else onNavigateToPreview(idea.id)
+                                    else {
+                                        viewModel.updateLastOpenedAt(idea.id)
+                                        onNavigateToPreview(idea.id)
+                                    }
                                 },
                                 onLongClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1331,6 +2218,7 @@ fun LibraryScreen(
                                 }
                             )
                         }
+                        } // end else (non-RECENT)
                     }
                 }
             }
@@ -1480,7 +2368,8 @@ private fun IdeaCard(
     onEditFiles: () -> Unit,
     onRemoveFromGroup: (() -> Unit)?,
     onMoveToGroup: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    groupPrefix: String? = null
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showItemMenu by remember { mutableStateOf(false) }
@@ -1568,12 +2457,30 @@ private fun IdeaCard(
             }
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = idea.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (groupPrefix != null) {
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(SpanStyle(
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                                fontWeight = FontWeight.Normal
+                            )) {
+                                append(groupPrefix)
+                                append(" / ")
+                            }
+                            append(idea.title)
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else {
+                    Text(
+                        text = idea.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Text(
                     text = buildString {
                         append(idea.keySignature ?: "")

@@ -160,7 +160,8 @@ class MusicXmlParser {
                     val stringNodes = techEl.getElementsByTagName("string")
                     val fretNodes = techEl.getElementsByTagName("fret")
                     if (stringNodes.length > 0) {
-                        guitarString = stringNodes.item(0).textContent.trim().toIntOrNull()?.let { it - 1 }
+                        // MusicXML <string> 1=High E, 6=Low E; app uses 0-based (0=Low E)
+                        guitarString = stringNodes.item(0).textContent.trim().toIntOrNull()?.let { 6 - it }
                     }
                     if (fretNodes.length > 0) {
                         guitarFret = fretNodes.item(0).textContent.trim().toIntOrNull()
