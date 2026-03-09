@@ -68,6 +68,19 @@
         var isReady = false;
         var pendingXml = null;
 
+        // Capture uncaught JS errors with full stack traces
+        window.onerror = function(msg, src, line, col, err) {
+            var detail = msg;
+            if (err && err.stack) detail += '\n' + err.stack;
+            else detail += ' at ' + (src || '?') + ':' + line + ':' + col;
+            showError('JS error: ' + detail);
+            return true;
+        };
+        window.addEventListener('unhandledrejection', function(ev) {
+            var r = ev.reason;
+            showError('Unhandled rejection: ' + (r && r.stack ? r.stack : r));
+        });
+
         function initAlphaTab() {
             try {
                 var container = document.getElementById('alphaTab');
@@ -116,7 +129,13 @@
                 });
 
                 api.error.on(function(e) {
-                    showError('alphaTab error: ' + (e.message || e));
+                    var detail = e.message || String(e);
+                    if (e.inner) {
+                        detail += '\nInner: ' + (e.inner.message || e.inner);
+                        if (e.inner.stack) detail += '\n' + e.inner.stack;
+                    }
+                    if (e.stack) detail += '\n' + e.stack;
+                    showError('alphaTab error: ' + detail);
                 });
 
                 api.scoreLoaded.on(function(score) {

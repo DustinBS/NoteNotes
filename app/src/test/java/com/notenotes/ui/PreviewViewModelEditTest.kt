@@ -220,12 +220,37 @@ class PreviewViewModelEditTest {
     }
 
     @Test
-    fun deleteSelectedNote_clearsSelection() {
+    fun deleteSelectedNote_selectsPreviousNote_LIFO() {
+        val notes = listOf(quarterNote(60), quarterNote(62), quarterNote(64))
+        setField("_notesList", notes)
+        vm.selectNote(1) // select middle note
+
+        vm.deleteSelectedNote()
+        // LIFO: should select previous note (index 0)
+        assertEquals(0, vm.selectedNoteIndex.value)
+        assertEquals(2, vm.notesList.value.size)
+    }
+
+    @Test
+    fun deleteSelectedNote_selectsNextIfFirst() {
         val notes = listOf(quarterNote(60), quarterNote(62))
+        setField("_notesList", notes)
+        vm.selectNote(0) // select first note
+
+        vm.deleteSelectedNote()
+        // Deleting first note: select index 0 (the new first)
+        assertEquals(0, vm.selectedNoteIndex.value)
+        assertEquals(1, vm.notesList.value.size)
+    }
+
+    @Test
+    fun deleteSelectedNote_clearsIfLastNote() {
+        val notes = listOf(quarterNote(60))
         setField("_notesList", notes)
         vm.selectNote(0)
 
         vm.deleteSelectedNote()
+        // Only note deleted: selection becomes null
         assertNull(vm.selectedNoteIndex.value)
     }
 

@@ -15,5 +15,8 @@ data class MelodyIdea(
     val tempoBpm: Int = 120,
     val keySignature: String? = null,  // e.g. "G major"
     val timeSignature: String? = null, // e.g. "3/4"
-    val notes: String? = null          // JSON-serialized note list
+    val notes: String? = null,         // JSON-serialized note list
+    val deletedAt: Long? = null,       // epoch millis when soft-deleted (null = active)
+    val groupId: String? = null,       // UUID grouping key (null = ungrouped)
+    val groupName: String? = null      // user-visible group name
 )

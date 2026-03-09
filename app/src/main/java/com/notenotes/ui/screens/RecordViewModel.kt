@@ -25,6 +25,8 @@ import java.util.*
 import android.os.Environment
 
 private const val TAG = "NNRecord"
+private const val PREFS_NAME = "notenotes_settings"
+private const val KEY_AUTO_TRANSCRIBE = "auto_transcribe"
 
 class RecordViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -55,6 +57,27 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
     private val _selectedInstrument = MutableStateFlow(InstrumentProfile.GUITAR)
     val selectedInstrument: StateFlow<InstrumentProfile> = _selectedInstrument
 
+    private val prefs = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+
+    private val _autoTranscribe = MutableStateFlow(prefs.getBoolean(KEY_AUTO_TRANSCRIBE, true))
+    val autoTranscribe: StateFlow<Boolean> = _autoTranscribe
+
+    // Listen for SharedPreferences changes (e.g. from SettingsScreen)
+    private val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == KEY_AUTO_TRANSCRIBE) {
+            _autoTranscribe.value = prefs.getBoolean(KEY_AUTO_TRANSCRIBE, true)
+        }
+    }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
+    }
+
     private val _recordingDuration = MutableStateFlow(0.0)
     val recordingDuration: StateFlow<Double> = _recordingDuration
 
@@ -66,6 +89,11 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setInstrument(instrument: InstrumentProfile) {
         _selectedInstrument.value = instrument
+    }
+
+    fun setAutoTranscribe(enabled: Boolean) {
+        _autoTranscribe.value = enabled
+        prefs.edit().putBoolean(KEY_AUTO_TRANSCRIBE, enabled).apply()
     }
 
     fun startRecording() {
@@ -113,7 +141,57 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        processRecording()
+        if (_autoTranscribe.value) {
+            processRecording()
+        } else {
+            saveWithoutTranscription()
+        }
+    }
+
+    /** Save WAV only (no transcription) and navigate to preview with empty notes. */
+    private fun saveWithoutTranscription() {
+        Log.i(TAG, "saveWithoutTranscription: Saving WAV without running transcription...")
+        _uiState.value = UiState.PROCESSING
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val samples = rawSamples ?: return@launch
+                val instrument = _selectedInstrument.value
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                val title = "Idea_$timestamp"
+
+                val externalMusicDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                    "NoteNotes"
+                )
+                externalMusicDir.mkdirs()
+                val audioDir = File(externalMusicDir, "audio")
+                audioDir.mkdirs()
+                val wavFile = File(audioDir, "$title.wav")
+                WavWriter.writeWav(samples, wavFile)
+                Log.d(TAG, "saveWithoutTranscription: WAV saved: ${wavFile.absolutePath}")
+
+                val idea = MelodyIdea(
+                    title = title,
+                    createdAt = System.currentTimeMillis(),
+                    audioFilePath = wavFile.absolutePath,
+                    midiFilePath = null,
+                    musicXmlFilePath = null,
+                    instrument = instrument.name,
+                    tempoBpm = 120,
+                    keySignature = "C",
+                    timeSignature = "4/4",
+                    notes = "[]"
+                )
+                val id = dao.insert(idea)
+                Log.i(TAG, "saveWithoutTranscription: Saved to DB with id=$id (no notes)")
+                _savedIdeaId.value = id
+                _uiState.value = UiState.DONE
+            } catch (e: Exception) {
+                Log.e(TAG, "saveWithoutTranscription: Error", e)
+                _errorMessage.value = "Save error: ${e.message}"
+                _uiState.value = UiState.ERROR
+            }
+        }
     }
 
     private fun processRecording() {

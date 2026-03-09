@@ -583,14 +583,22 @@ private fun NoteEditDialog(
 
                     // Primary note — shows original → current if changed
                     val primaryChanged = editedPrimaryString != originalPrimaryString || editedPrimaryFret != originalPrimaryFret
+                    val primaryStringColor = if (editedPrimaryString in GuitarUtils.STRINGS.indices)
+                        Color(GuitarUtils.STRINGS[editedPrimaryString].colorArgb)
+                    else MaterialTheme.colorScheme.primary
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(4.dp))
+                            .border(
+                                width = if (editingChordPitchIndex == null) 2.dp else 0.dp,
+                                color = if (editingChordPitchIndex == null) primaryStringColor else Color.Transparent,
+                                shape = RoundedCornerShape(4.dp)
+                            )
                             .background(
                                 if (editingChordPitchIndex == null)
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                                    primaryStringColor.copy(alpha = 0.25f)
+                                else primaryStringColor.copy(alpha = 0.08f)
                             )
                             .clickable { editingChordPitchIndex = null }
                             .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -640,14 +648,23 @@ private fun NoteEditDialog(
                         val curPos = editableChordPositions.getOrNull(idx)
                         val chordNoteChanged = origPitch != pitch || origPos != curPos
 
+                        val chordStringIdx = curPos?.first ?: 0
+                        val chordStringColor = if (chordStringIdx in GuitarUtils.STRINGS.indices)
+                            Color(GuitarUtils.STRINGS[chordStringIdx].colorArgb)
+                        else MaterialTheme.colorScheme.primary
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(4.dp))
+                                .border(
+                                    width = if (editingChordPitchIndex == idx) 2.dp else 0.dp,
+                                    color = if (editingChordPitchIndex == idx) chordStringColor else Color.Transparent,
+                                    shape = RoundedCornerShape(4.dp)
+                                )
                                 .background(
                                     if (editingChordPitchIndex == idx)
-                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                                        chordStringColor.copy(alpha = 0.25f)
+                                    else chordStringColor.copy(alpha = 0.08f)
                                 )
                                 .clickable { editingChordPitchIndex = idx }
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -699,7 +716,9 @@ private fun NoteEditDialog(
                                             if (idx in editableChordPositions.indices) {
                                                 editableChordPositions.removeAt(idx)
                                             }
-                                            if (editingChordPitchIndex == idx) editingChordPitchIndex = null
+                                            // LIFO: select previous chord note, or null if none left
+                                            editingChordPitchIndex = if (editableChordPitches.isEmpty()) null
+                                                else (idx - 1).coerceAtLeast(0).coerceAtMost(editableChordPitches.size - 1)
                                         },
                                     tint = MaterialTheme.colorScheme.error
                                 )
@@ -734,10 +753,18 @@ private fun NoteEditDialog(
                 ) {
                     GuitarUtils.STRINGS.forEachIndexed { index, gs ->
                         val isSelected = index == selectedStringIndex
+                        val sColor = Color(gs.colorArgb)
                         FilterChip(
                             selected = isSelected,
                             onClick = { selectedStringIndex = index },
-                            label = { Text(gs.label, fontSize = 10.sp, maxLines = 1, softWrap = false) },
+                            label = { Text(gs.label, fontSize = 10.sp, maxLines = 1, softWrap = false,
+                                color = if (isSelected) Color.White else sColor) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = sColor.copy(alpha = 0.15f),
+                                labelColor = sColor,
+                                selectedContainerColor = sColor,
+                                selectedLabelColor = Color.White
+                            )
                         )
                     }
                 }

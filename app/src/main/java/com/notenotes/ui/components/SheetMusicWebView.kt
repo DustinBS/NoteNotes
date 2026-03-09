@@ -57,15 +57,14 @@ fun SheetMusicWebView(
         }
     }
 
-    // Show/hide cursor and update position during playback
-    LaunchedEffect(isPlaying) {
+    // Show/hide cursor — keep visible during scrubbing (position changes while paused)
+    LaunchedEffect(isPlaying, currentNoteIndex) {
         val wv = webView ?: return@LaunchedEffect
-        if (isPlaying) {
-            wv.evaluateJavascript("showCursor()", null)
-            cursorShown = true
-        } else if (cursorShown && !isPlaying) {
-            wv.evaluateJavascript("hideCursor()", null)
-            cursorShown = false
+        if (isPlaying || currentNoteIndex >= 0) {
+            if (!cursorShown) {
+                wv.evaluateJavascript("showCursor()", null)
+                cursorShown = true
+            }
         }
     }
 

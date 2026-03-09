@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.core.content.FileProvider
+import com.notenotes.export.MusicXmlSanitizer
 import com.notenotes.model.TranscriptionResult
 import java.io.File
 
@@ -37,7 +38,11 @@ class FileExporter(
         val dir = File(context.filesDir, "exports")
         dir.mkdirs()
         val file = File(dir, "$filename.musicxml")
-        musicXmlGenerator.writeToFile(result, file, partName)
+        // Generate + sanitize so exported XML is always valid for alphaTab/other readers
+        val xml = MusicXmlSanitizer.sanitize(
+            musicXmlGenerator.generateMusicXml(result, partName)
+        )
+        file.writeText(xml)
         return file
     }
 
@@ -75,30 +80,52 @@ class FileExporter(
     }
 
     /**
-     * Share an audio WAV file.
+     * Share an audio file, renamed to match the idea title.
      */
-    fun shareAudioFile(audioFile: File): Intent {
+    fun shareAudioFile(audioFile: File, title: String? = null): Intent {
         // Copy to exports dir so FileProvider can access it
         val dir = File(context.filesDir, "exports")
         dir.mkdirs()
-        val dest = File(dir, audioFile.name)
+        val ext = audioFile.extension.ifEmpty { "wav" }
+        val fileName = if (!title.isNullOrBlank()) "$title.$ext" else audioFile.name
+        val dest = File(dir, fileName)
         audioFile.copyTo(dest, overwrite = true)
-        return createShareIntent(dest, "audio/wav")
+        val mime = when (ext.lowercase()) {
+            "mp3" -> "audio/mpeg"
+            "m4a", "aac" -> "audio/mp4"
+            "ogg" -> "audio/ogg"
+            "flac" -> "audio/flac"
+            else -> "audio/wav"
+        }
+        return createShareIntent(dest, mime)
     }
 
     /**
      * Share both MIDI and MusicXML files.
      */
-    fun shareAll(result: TranscriptionResult, filename: String): Intent {
+    fun shareAll(result: TranscriptionResult, filename: String, audioFile: File? = null): Intent {
         val midiFile = exportMidi(result, filename)
         val xmlFile = exportMusicXml(result, filename)
 
-        val midiUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", midiFile)
-        val xmlUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", xmlFile)
+        val uris = arrayListOf(
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", midiFile),
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", xmlFile)
+        )
+
+        // Include the audio file if available
+        if (audioFile != null && audioFile.exists()) {
+            val dir = File(context.filesDir, "exports")
+            dir.mkdirs()
+            val ext = audioFile.extension.ifEmpty { "wav" }
+            val audioName = "$filename.$ext"
+            val dest = File(dir, audioName)
+            audioFile.copyTo(dest, overwrite = true)
+            uris.add(FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest))
+        }
 
         return Intent(Intent.ACTION_SEND_MULTIPLE).apply {
             type = "*/*"
-            putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(midiUri, xmlUri))
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }

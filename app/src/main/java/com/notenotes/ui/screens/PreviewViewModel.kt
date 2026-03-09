@@ -7,12 +7,14 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.notenotes.audio.AudioPlayer
+import com.notenotes.audio.AudioDecoder
 import com.notenotes.audio.WavReader
 import com.notenotes.audio.WavWriter
 import com.notenotes.data.AppDatabase
 import com.notenotes.export.FileExporter
 import com.notenotes.export.MidiWriter
 import com.notenotes.export.MusicXmlGenerator
+import com.notenotes.export.MusicXmlSanitizer
 import com.notenotes.model.InstrumentProfile
 import com.notenotes.model.MelodyIdea
 import com.notenotes.model.MusicalNote
@@ -31,6 +33,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import android.os.Environment
 
 private const val TAG = "NNPreview"
@@ -142,17 +146,82 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                         instrument = instrument
                     )
                     currentResult = result
-                    _musicXml.value = musicXmlGenerator.generateMusicXml(result)
+                    _musicXml.value = MusicXmlSanitizer.sanitize(
+                        musicXmlGenerator.generateMusicXml(result)
+                    )
                     _notesList.value = notes
                     Log.d(TAG, "loadIdea: MusicXML regenerated successfully")
                 } else {
                     // Fallback: try loading from saved file (no notes in DB)
                     val xmlFile = melodyIdea.musicXmlFilePath?.let { File(it) }
                     if (xmlFile != null && xmlFile.exists() && xmlFile.length() > 0) {
-                        val content = xmlFile.readText()
+                        var content = xmlFile.readText()
                         if (content.trimStart().startsWith("<?xml") || content.trimStart().startsWith("<score-partwise")) {
                             Log.d(TAG, "loadIdea: Loading MusicXML from file (${xmlFile.length()} bytes)")
-                            _musicXml.value = content
+                            // Patch legacy files: inject <voice>1</voice> if missing
+                            if (!content.contains("<voice>")) {
+                                content = content.replace(
+                                    Regex("(<duration>[^<]*</duration>)"),
+                                    "$1\n        <voice>1</voice>"
+                                )
+                                Log.d(TAG, "loadIdea: Patched legacy MusicXML with <voice> elements")
+                            }
+                            content = MusicXmlSanitizer.sanitize(content)
+                            try { xmlFile.writeText(content) } catch (_: Exception) {}
+
+                            // Parse notes AND metadata from MusicXML
+                            val xmlParser = com.notenotes.export.MusicXmlParser()
+                            val parseResult = try {
+                                xmlParser.parse(content, melodyIdea.tempoBpm)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "loadIdea: Failed to parse MusicXML", e)
+                                null
+                            }
+
+                            if (parseResult != null && parseResult.notes.isNotEmpty()) {
+                                val parsedNotes = parseResult.notes
+                                Log.d(TAG, "loadIdea: Parsed ${parsedNotes.size} notes from MusicXML file")
+
+                                // Use metadata from XML, falling back to idea's existing values
+                                val resolvedInstrument = parseResult.instrument ?: melodyIdea.instrument
+                                val resolvedKey = parseResult.keySignature ?: melodyIdea.keySignature
+                                val resolvedTime = parseResult.timeSignature ?: melodyIdea.timeSignature
+                                val resolvedTempo = parseResult.tempoBpm ?: melodyIdea.tempoBpm
+
+                                val keySig = parseKeySignature(resolvedKey)
+                                val timeSig = parseTimeSignature(resolvedTime)
+                                val instrument = InstrumentProfile.ALL.find { it.name == resolvedInstrument }
+
+                                val result = TranscriptionResult(
+                                    notes = parsedNotes,
+                                    keySignature = keySig,
+                                    timeSignature = timeSig,
+                                    tempoBpm = resolvedTempo,
+                                    instrument = instrument
+                                )
+                                currentResult = result
+                                _notesList.value = parsedNotes
+
+                                // Regenerate XML from parsed notes for consistency
+                                // (so first-load and re-open show the same render)
+                                _musicXml.value = MusicXmlSanitizer.sanitize(
+                                    musicXmlGenerator.generateMusicXml(result)
+                                )
+
+                                // Persist parsed notes AND extracted metadata
+                                val updatedIdea = melodyIdea.copy(
+                                    notes = gson.toJson(parsedNotes),
+                                    instrument = resolvedInstrument,
+                                    keySignature = resolvedKey,
+                                    timeSignature = resolvedTime,
+                                    tempoBpm = resolvedTempo
+                                )
+                                dao.update(updatedIdea)
+                                _idea.value = updatedIdea
+                            } else {
+                                // Parsing failed — show original XML as fallback
+                                _musicXml.value = content
+                            }
                         } else {
                             Log.w(TAG, "loadIdea: File exists but doesn't look like valid MusicXML")
                         }
@@ -231,18 +300,95 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     fun shareAll(context: Context) {
         val result = buildResult() ?: return
         val title = _idea.value?.title ?: "melody"
-        val intent = fileExporter.shareAll(result, title)
+        val audioFile = _idea.value?.audioFilePath?.let { File(it) }
+        val intent = fileExporter.shareAll(result, title, audioFile)
         context.startActivity(Intent.createChooser(intent, "Share Files"))
+    }
+
+    /**
+     * Export a complete snapshot ZIP containing audio, MIDI, MusicXML,
+     * and a metadata JSON file that preserves all idea properties.
+     */
+    fun shareSnapshot(context: Context) {
+        val melodyIdea = _idea.value ?: return
+        val title = melodyIdea.title
+        val dir = File(context.filesDir, "exports")
+        dir.mkdirs()
+        val zipFile = File(dir, "$title.notenotes.zip")
+
+        try {
+            ZipOutputStream(zipFile.outputStream()).use { zos ->
+                // metadata.json
+                val meta = mutableMapOf<String, Any?>()
+                meta["title"] = melodyIdea.title
+                meta["instrument"] = melodyIdea.instrument
+                meta["tempoBpm"] = melodyIdea.tempoBpm
+                meta["keySignature"] = melodyIdea.keySignature
+                meta["timeSignature"] = melodyIdea.timeSignature
+                meta["notes"] = melodyIdea.notes
+                meta["groupId"] = melodyIdea.groupId
+                meta["groupName"] = melodyIdea.groupName
+                meta["createdAt"] = melodyIdea.createdAt
+
+                zos.putNextEntry(ZipEntry("metadata.json"))
+                zos.write(gson.toJson(meta).toByteArray())
+                zos.closeEntry()
+
+                // Audio file
+                melodyIdea.audioFilePath?.let { path ->
+                    val audio = File(path)
+                    if (audio.exists()) {
+                        val ext = audio.extension.ifEmpty { "wav" }
+                        zos.putNextEntry(ZipEntry("audio.$ext"))
+                        audio.inputStream().use { it.copyTo(zos) }
+                        zos.closeEntry()
+                    }
+                }
+
+                // MIDI (generate fresh)
+                val result = buildResult()
+                if (result != null) {
+                    val midFile = File(dir, "__temp.mid")
+                    midiWriter.writeToFile(result, midFile)
+                    zos.putNextEntry(ZipEntry("melody.mid"))
+                    midFile.inputStream().use { it.copyTo(zos) }
+                    zos.closeEntry()
+                    midFile.delete()
+
+                    // MusicXML (generate fresh + sanitize)
+                    val xml = MusicXmlSanitizer.sanitize(
+                        musicXmlGenerator.generateMusicXml(result)
+                    )
+                    zos.putNextEntry(ZipEntry("melody.musicxml"))
+                    zos.write(xml.toByteArray())
+                    zos.closeEntry()
+                }
+            }
+
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", zipFile
+            )
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "Share Snapshot"))
+        } catch (e: Exception) {
+            Log.e(TAG, "shareSnapshot: Error", e)
+            _errorMessage.value = "Snapshot export error: ${e.message}"
+        }
     }
 
     fun shareAudio(context: Context) {
         val audioPath = _idea.value?.audioFilePath ?: return
+        val title = _idea.value?.title
         val file = File(audioPath)
         if (!file.exists()) {
             _errorMessage.value = "Audio file not found"
             return
         }
-        val intent = fileExporter.shareAudioFile(file)
+        val intent = fileExporter.shareAudioFile(file, title)
         context.startActivity(Intent.createChooser(intent, "Share Audio"))
     }
 
@@ -545,7 +691,12 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
             "(MIDI ${removed.midiPitch}) at index $idx")
 
         updateNotesAndRefresh(currentNotes)
-        _selectedNoteIndex.value = null
+        // LIFO: select previous note, or next if first was deleted, or null if empty
+        _selectedNoteIndex.value = when {
+            currentNotes.isEmpty() -> null
+            idx > 0 -> idx - 1
+            else -> 0
+        }
     }
 
     /**
@@ -575,6 +726,150 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
 
     fun openRenameDialog() { _isRenameDialogOpen.value = true }
     fun closeRenameDialog() { _isRenameDialogOpen.value = false }
+
+    /**
+     * Update the instrument and regenerate MusicXML.
+     */
+    fun updateInstrument(instrument: InstrumentProfile) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val melodyIdea = _idea.value ?: return@launch
+            val updated = melodyIdea.copy(instrument = instrument.name)
+            dao.update(updated)
+            _idea.value = updated
+            // Regenerate MusicXML with new instrument (clef, transposition)
+            updateNotesAndRefresh(_notesList.value)
+            Log.i(TAG, "updateInstrument: Changed to ${instrument.displayName}")
+        }
+    }
+
+    /**
+     * Save all files (MIDI, MusicXML, Audio) to device Downloads/NoteNotes/.
+     * Scans saved files so they appear immediately in file pickers.
+     */
+    fun saveToDevice(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val melodyIdea = _idea.value ?: return@launch
+                val title = melodyIdea.title
+                val downloadsDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    "NoteNotes"
+                )
+                downloadsDir.mkdirs()
+
+                var savedCount = 0
+                val savedPaths = mutableListOf<String>()
+                val savedMimes = mutableListOf<String>()
+
+                // Save audio
+                melodyIdea.audioFilePath?.let { path ->
+                    val src = File(path)
+                    if (src.exists()) {
+                        val ext = src.extension.ifEmpty { "wav" }
+                        val dest = File(downloadsDir, "$title.$ext")
+                        src.copyTo(dest, overwrite = true)
+                        savedPaths.add(dest.absolutePath)
+                        savedMimes.add(when (ext.lowercase()) {
+                            "mp3" -> "audio/mpeg"; "m4a", "aac" -> "audio/mp4"
+                            "ogg" -> "audio/ogg"; "flac" -> "audio/flac"
+                            else -> "audio/wav"
+                        })
+                        savedCount++
+                    }
+                }
+
+                // Save MIDI
+                melodyIdea.midiFilePath?.let { path ->
+                    val src = File(path)
+                    if (src.exists()) {
+                        val dest = File(downloadsDir, "$title.mid")
+                        src.copyTo(dest, overwrite = true)
+                        savedPaths.add(dest.absolutePath)
+                        savedMimes.add("audio/midi")
+                        savedCount++
+                    }
+                }
+
+                // Save MusicXML
+                melodyIdea.musicXmlFilePath?.let { path ->
+                    val src = File(path)
+                    if (src.exists()) {
+                        val dest = File(downloadsDir, "$title.musicxml")
+                        src.copyTo(dest, overwrite = true)
+                        savedPaths.add(dest.absolutePath)
+                        savedMimes.add("application/xml")
+                        savedCount++
+                    }
+                }
+
+                // Scan saved files so they appear in the SAF file picker immediately
+                if (savedPaths.isNotEmpty()) {
+                    android.media.MediaScannerConnection.scanFile(
+                        context,
+                        savedPaths.toTypedArray(),
+                        savedMimes.toTypedArray(),
+                        null
+                    )
+                }
+
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Saved $savedCount files to Downloads/NoteNotes",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+                Log.i(TAG, "saveToDevice: Saved $savedCount files to ${downloadsDir.absolutePath}")
+            } catch (e: Exception) {
+                Log.e(TAG, "saveToDevice: Error", e)
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Save failed: ${e.message}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    /**
+     * Open the Downloads/NoteNotes folder in the system file manager.
+     */
+    fun openInFileManager(context: Context) {
+        try {
+            val downloadsDir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                "NoteNotes"
+            )
+            if (!downloadsDir.exists()) downloadsDir.mkdirs()
+
+            // Try the standard Documents UI
+            val uri = android.net.Uri.parse(
+                "content://com.android.externalstorage.documents/document/primary:Download%2FNoteNotes"
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "vnd.android.document/directory")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            // Fallback: open Downloads root
+            try {
+                val intent = Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+            } catch (e2: Exception) {
+                Log.e(TAG, "openInFileManager: Could not open file manager", e2)
+                android.widget.Toast.makeText(
+                    context,
+                    "Files saved to Downloads/NoteNotes",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
 
     /**
      * Update the key signature and regenerate MusicXML.
@@ -689,8 +984,10 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 )
                 currentResult = result
 
-                // Regenerate MusicXML
-                val xmlContent = musicXmlGenerator.generateMusicXml(result)
+                // Regenerate MusicXML (sanitized for alphaTab)
+                val xmlContent = MusicXmlSanitizer.sanitize(
+                    musicXmlGenerator.generateMusicXml(result)
+                )
                 _musicXml.value = xmlContent
 
                 // Regenerate export files
@@ -718,6 +1015,9 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 _idea.value = updatedIdea
 
                 Log.i(TAG, "updateNotesAndRefresh: Saved ${notes.size} notes")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Normal debounce cancellation — not an error, just re-throw
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "updateNotesAndRefresh: Error", e)
                 _errorMessage.value = "Error saving: ${e.message}"
@@ -813,7 +1113,9 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 val xmlFile = File(exportsDir, "$title.musicxml")
                 musicXmlGenerator.writeToFile(result, xmlFile)
 
-                val xmlContent = musicXmlGenerator.generateMusicXml(result)
+                val xmlContent = MusicXmlSanitizer.sanitize(
+                    musicXmlGenerator.generateMusicXml(result)
+                )
 
                 // Update database
                 val updatedIdea = melodyIdea.copy(
@@ -827,6 +1129,8 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 dao.update(updatedIdea)
 
                 // Update in-memory state
+                _selectedNoteIndex.value = null
+                _editCursorFraction.value = null
                 currentResult = result
                 _idea.value = updatedIdea
                 _musicXml.value = xmlContent
@@ -846,12 +1150,17 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Read PCM samples from a WAV file.
+     * Read PCM samples from an audio file.
+     * Tries WavReader first (fast, no codec overhead), falls back to AudioDecoder for non-WAV.
      */
     private fun readWavSamples(file: File): ShortArray? {
         val result = WavReader.readSamples(file)
-        if (result == null) Log.e(TAG, "readWavSamples: Failed to read ${file.name}")
-        return result
+        if (result != null) return result
+        // Fallback: decode non-WAV formats (MP3, M4A, OGG, FLAC) via MediaCodec
+        Log.d(TAG, "readWavSamples: WavReader failed, trying AudioDecoder for ${file.name}")
+        val decoded = AudioDecoder.decodeSamples(file)
+        if (decoded == null) Log.e(TAG, "readWavSamples: AudioDecoder also failed for ${file.name}")
+        return decoded
     }
 
     private fun buildResult(): TranscriptionResult? {
@@ -876,10 +1185,17 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Load waveform data from a WAV file for visualization.
+     * Load waveform data from an audio file for visualization.
+     * Supports WAV natively, and MP3/M4A/OGG/FLAC via MediaCodec fallback.
      */
     private fun loadWaveformData(file: File) {
-        val wavData = WavReader.readFull(file)
+        // Try WAV first (fast, no codec overhead)
+        var wavData = WavReader.readFull(file)
+        if (wavData == null) {
+            // Fallback: decode non-WAV formats via MediaCodec
+            Log.d(TAG, "loadWaveformData: WavReader failed, trying AudioDecoder for ${file.name}")
+            wavData = AudioDecoder.decode(file)
+        }
         if (wavData == null) {
             Log.w(TAG, "loadWaveformData: Could not read ${file.absolutePath}")
             return

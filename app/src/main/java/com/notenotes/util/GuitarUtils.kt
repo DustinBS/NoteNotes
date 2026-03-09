@@ -11,16 +11,17 @@ object GuitarUtils {
         val number: Int,       // 1-6 (1 = thinnest/high E, 6 = thickest/low E)
         val name: String,      // "E2", "A2", etc.
         val openMidi: Int,     // MIDI note for open string (fret 0)
-        val label: String      // Short display label
+        val label: String,     // Short display label
+        val colorArgb: Long    // Color for this string (ARGB hex)
     )
 
     val STRINGS = listOf(
-        GuitarString(6, "Low E", 40, "6 E"),
-        GuitarString(5, "A",     45, "5 A"),
-        GuitarString(4, "D",     50, "4 D"),
-        GuitarString(3, "G",     55, "3 G"),
-        GuitarString(2, "B",     59, "2 B"),
-        GuitarString(1, "High E", 64, "1 E")
+        GuitarString(6, "Low E", 40, "6 E", 0xFF_E53935),  // Red
+        GuitarString(5, "A",     45, "5 A", 0xFF_FB8C00),  // Orange
+        GuitarString(4, "D",     50, "4 D", 0xFF_E6A817),  // Amber/Gold
+        GuitarString(3, "G",     55, "3 G", 0xFF_43A047),  // Green
+        GuitarString(2, "B",     59, "2 B", 0xFF_1E88E5),  // Blue
+        GuitarString(1, "High E", 64, "1 E", 0xFF_8E24AA)  // Purple
     )
 
     const val MAX_FRET = 24

@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -61,15 +62,45 @@ fun NoteEditorPanel(
     var selectedStringIndex by remember { mutableIntStateOf(selectedNote?.guitarString ?: 0) }
     var selectedFret by remember { mutableIntStateOf(selectedNote?.guitarFret ?: 0) }
 
-    // Which chord note is being edited: -1 = primary, 0..n = chord pitch index, null = not editing chord
-    var editingChordNoteIndex by remember { mutableIntStateOf(-1) }
+    // Which chord note is being edited: 0 = primary, 1..n = chord pitch index
+    // Tracked by identity (MIDI pitch) so sorting doesn't break selection
+    var editingChordNoteIndex by remember { mutableIntStateOf(0) }
+    // The MIDI pitch of the note we intend to keep selected after sort
+    var editingTargetMidi by remember { mutableIntStateOf(selectedNote?.midiPitch ?: 0) }
 
     // Sync when a DIFFERENT note is selected (not when the same note's data changes)
     LaunchedEffect(selectedNoteIndex) {
         val note = selectedNote ?: return@LaunchedEffect
         selectedStringIndex = note.guitarString ?: 0
         selectedFret = note.guitarFret ?: 0
-        editingChordNoteIndex = -1  // Reset to primary
+        editingChordNoteIndex = 0  // Reset to primary
+        editingTargetMidi = note.midiPitch
+    }
+
+    // Re-sync editingChordNoteIndex after data changes (e.g. sort in updateChordPitches)
+    LaunchedEffect(selectedNote?.chordPitches, selectedNote?.midiPitch) {
+        val note = selectedNote ?: return@LaunchedEffect
+        // Build full pitch list: primary + chord
+        val allMidis = mutableListOf(note.midiPitch)
+        allMidis.addAll(note.chordPitches ?: emptyList())
+        val foundIdx = allMidis.indexOf(editingTargetMidi)
+        if (foundIdx >= 0 && foundIdx != editingChordNoteIndex) {
+            editingChordNoteIndex = foundIdx
+            // Also sync string/fret selectors to the correct note
+            val primaryString = note.guitarString ?: 0
+            val primaryFret = note.guitarFret ?: 0
+            val safeCSF = note.safeChordStringFrets
+            if (foundIdx == 0) {
+                selectedStringIndex = primaryString
+                selectedFret = primaryFret
+            } else {
+                val chordIdx = foundIdx - 1
+                if (chordIdx in safeCSF.indices) {
+                    selectedStringIndex = safeCSF[chordIdx].first
+                    selectedFret = safeCSF[chordIdx].second
+                }
+            }
+        }
     }
 
     // Real-time update when string/fret changes for an existing selected note
@@ -95,6 +126,8 @@ fun NoteEditorPanel(
                 if (fullPitches[editIdx] == newMidi && fullStringFrets[editIdx] == Pair(selectedStringIndex, selectedFret)) return@LaunchedEffect
                 fullPitches[editIdx] = newMidi
                 fullStringFrets[editIdx] = Pair(selectedStringIndex, selectedFret)
+                // Track the new identity so re-sync after sort finds the right note
+                editingTargetMidi = newMidi
             }
             // If editing primary (index 0): update primary + rebuild chord
             if (editIdx == 0) {
@@ -194,22 +227,27 @@ fun NoteEditorPanel(
                                     val isEditing = editingChordNoteIndex == idx
                                     val noteName = PitchUtils.midiToNoteName(cn.pitch)
                                     val sName = if (cn.stringIdx in stringNames.indices) stringNames[cn.stringIdx] else "?"
+                                    val stringColor = if (cn.stringIdx in GuitarUtils.STRINGS.indices)
+                                        Color(GuitarUtils.STRINGS[cn.stringIdx].colorArgb)
+                                    else MaterialTheme.colorScheme.primary
                                     FilterChip(
                                         selected = isEditing,
                                         onClick = {
                                             editingChordNoteIndex = idx
+                                            editingTargetMidi = cn.pitch
                                             selectedStringIndex = cn.stringIdx
                                             selectedFret = cn.fret
                                         },
                                         label = {
                                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                                 Text(noteName, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                                Text("$sName F${cn.fret}", fontSize = 9.sp)
+                                                Text("$sName F${cn.fret}", fontSize = 9.sp,
+                                                    color = if (isEditing) Color.White.copy(alpha = 0.9f) else stringColor)
                                             }
                                         },
                                         colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                            selectedContainerColor = stringColor,
+                                            selectedLabelColor = Color.White
                                         )
                                     )
                                 }
@@ -230,9 +268,12 @@ fun NoteEditorPanel(
                                             val newPitches = remaining.map { it.pitch }
                                             val newStringFrets = remaining.map { Pair(it.stringIdx, it.fret) }
                                             onUpdateChordNote?.invoke(selectedNoteIndex, newPitches, newStringFrets)
-                                            editingChordNoteIndex = 0
-                                            selectedStringIndex = remaining[0].stringIdx
-                                            selectedFret = remaining[0].fret
+                                            // LIFO: select previous note, or last note if removing first
+                                            val lifoIdx = (removeIdx - 1).coerceAtLeast(0).coerceAtMost(remaining.size - 1)
+                                            editingChordNoteIndex = lifoIdx
+                                            editingTargetMidi = remaining[lifoIdx].pitch
+                                            selectedStringIndex = remaining[lifoIdx].stringIdx
+                                            selectedFret = remaining[lifoIdx].fret
                                         },
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                                         modifier = Modifier.height(28.dp),
@@ -342,13 +383,17 @@ fun NoteEditorPanel(
             ) {
                 GuitarUtils.STRINGS.forEachIndexed { index, gs ->
                     val isSelected = index == selectedStringIndex
+                    val sColor = Color(gs.colorArgb)
                     FilterChip(
                         selected = isSelected,
                         onClick = { selectedStringIndex = index },
-                        label = { Text(gs.label, fontSize = 11.sp, maxLines = 1, softWrap = false) },
+                        label = { Text(gs.label, fontSize = 11.sp, maxLines = 1, softWrap = false,
+                            color = if (isSelected) Color.White else sColor) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            containerColor = sColor.copy(alpha = 0.15f),
+                            labelColor = sColor,
+                            selectedContainerColor = sColor,
+                            selectedLabelColor = Color.White
                         )
                     )
                 }
@@ -433,6 +478,7 @@ fun NoteEditorPanel(
                             onUpdateChordNote?.invoke(selectedNoteIndex, fullPitches, fullStringFrets)
                             // Switch to editing the newly added note
                             editingChordNoteIndex = fullPitches.size - 1
+                            editingTargetMidi = newMidi
                             selectedStringIndex = unusedString
                             selectedFret = 0
                         },

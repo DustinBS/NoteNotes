@@ -72,8 +72,10 @@ class PdfExportDiagnosticTest {
         )
         val result = makeResult(listOf(note))
         val xml = generator.generateMusicXml(result)
-        assertTrue("Should have staff-details or tuning info",
-            xml.contains("staff-tuning") || xml.contains("staff-details") || xml.contains("tablature"))
+        assertTrue("Should have staff-details with tuning info",
+            xml.contains("staff-tuning") && xml.contains("staff-details"))
+        assertTrue("Should have per-note guitar tab data",
+            xml.contains("<string>") && xml.contains("<fret>"))
     }
 
     // ══════════════════════════════════════════════════════════════════════

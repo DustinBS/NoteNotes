@@ -1,22 +1,31 @@
 package com.notenotes.ui.screens
 
+import android.content.Context
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.notenotes.model.InstrumentProfile
+
+private const val PREFS_NAME = "notenotes_settings"
+private const val KEY_AUTO_TRANSCRIBE = "auto_transcribe"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit
 ) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+
     var selectedInstrument by remember { mutableStateOf(InstrumentProfile.GUITAR) }
     var defaultTempo by remember { mutableStateOf("120") }
-    var windowSize by remember { mutableFloatStateOf(5f) }
+    var autoTranscribe by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_TRANSCRIBE, true)) }
 
     Scaffold(
         topBar = {
@@ -102,29 +111,28 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Waveform window size
-            Text(
-                text = "Waveform Settings",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            Text(
-                text = "Window Size: ${windowSize.toInt()}s",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Slider(
-                value = windowSize,
-                onValueChange = { windowSize = it },
-                valueRange = 1f..30f,
-                steps = 28,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Text(
-                text = "Controls how many seconds of audio are shown in the waveform view at once.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // Auto-transcribe toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Auto-transcribe", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Automatically detect notes after recording",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = autoTranscribe,
+                    onCheckedChange = {
+                        autoTranscribe = it
+                        prefs.edit().putBoolean(KEY_AUTO_TRANSCRIBE, it).apply()
+                    }
+                )
+            }
 
             Spacer(modifier = Modifier.height(32.dp))
 

@@ -1,6 +1,7 @@
 package com.notenotes.ui.screens
 
 import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -27,6 +28,7 @@ import com.notenotes.ui.components.NoteEditorPanel
 import com.notenotes.processing.PitchAlgorithm
 import com.notenotes.model.KeySignature
 import com.notenotes.model.TimeSignature
+import com.notenotes.model.InstrumentProfile
 
 private const val PREFS_NAME = "notenotes_display"
 private const val KEY_BARS_PER_ROW = "bars_per_row"
@@ -85,6 +87,23 @@ fun PreviewScreen(
     var showKeyDialog by remember { mutableStateOf(false) }
     var showTimeDialog by remember { mutableStateOf(false) }
     var showBpmDialog by remember { mutableStateOf(false) }
+    var showInstrumentDialog by remember { mutableStateOf(false) }
+
+    // Back button: dismiss dialogs/editor/selection before navigating back
+    BackHandler(
+        enabled = showClearDialog || showKeyDialog || showTimeDialog || showBpmDialog
+                || showInstrumentDialog || isRenameDialogOpen || selectedNoteIndex != null
+    ) {
+        when {
+            showClearDialog -> showClearDialog = false
+            showKeyDialog -> showKeyDialog = false
+            showTimeDialog -> showTimeDialog = false
+            showBpmDialog -> showBpmDialog = false
+            showInstrumentDialog -> showInstrumentDialog = false
+            isRenameDialogOpen -> viewModel.closeRenameDialog()
+            selectedNoteIndex != null -> viewModel.selectNote(null)
+        }
+    }
 
     // Load idea on first composition
     LaunchedEffect(ideaId) {
@@ -286,6 +305,49 @@ fun PreviewScreen(
         )
     }
 
+    // Instrument edit dialog
+    if (showInstrumentDialog) {
+        AlertDialog(
+            onDismissRequest = { showInstrumentDialog = false },
+            title = { Text("Instrument") },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        "Changing instrument affects transposition and clef in sheet music.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    InstrumentProfile.ALL.forEach { inst ->
+                        val isCurrent = idea?.instrument == inst.name
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    inst.displayName,
+                                    fontWeight = if (isCurrent) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal
+                                )
+                            },
+                            onClick = {
+                                viewModel.updateInstrument(inst)
+                                showInstrumentDialog = false
+                            },
+                            leadingIcon = {
+                                if (isCurrent) Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showInstrumentDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -341,6 +403,11 @@ fun PreviewScreen(
                                 leadingIcon = { Icon(Icons.Filled.FolderOpen, contentDescription = null) }
                             )
                             DropdownMenuItem(
+                                text = { Text("Snapshot (.zip)") },
+                                onClick = { showMenu = false; viewModel.shareSnapshot(context) },
+                                leadingIcon = { Icon(Icons.Filled.Inventory2, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("PDF (Sheet Music)") },
                                 onClick = {
                                     showMenu = false
@@ -356,6 +423,16 @@ fun PreviewScreen(
                                 },
                                 leadingIcon = { Icon(Icons.Filled.PictureAsPdf, contentDescription = null) },
                                 enabled = sheetWebView != null && !printPending
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Save to Device") },
+                                onClick = { showMenu = false; viewModel.saveToDevice(context) },
+                                leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Open in Files") },
+                                onClick = { showMenu = false; viewModel.openInFileManager(context) },
+                                leadingIcon = { Icon(Icons.Filled.FolderOpen, contentDescription = null) }
                             )
 
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -530,6 +607,17 @@ fun PreviewScreen(
                                     },
                                     onClick = {},
                                     enabled = false,
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        val instrumentName = InstrumentProfile.ALL
+                                            .find { it.name == melodyIdea.instrument }
+                                            ?.displayName ?: melodyIdea.instrument
+                                        Text("Instrument: $instrumentName", style = MaterialTheme.typography.bodySmall)
+                                    },
+                                    onClick = { showMenu = false; showInstrumentDialog = true },
+                                    trailingIcon = { Icon(Icons.Filled.Edit, contentDescription = "Edit", modifier = Modifier.size(14.dp)) },
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                                 )
                             }

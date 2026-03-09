@@ -45,6 +45,7 @@ fun RecordScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val savedIdeaId by viewModel.savedIdeaId.collectAsState()
     val selectedInstrument by viewModel.selectedInstrument.collectAsState()
+    val autoTranscribe by viewModel.autoTranscribe.collectAsState()
     val recordingDuration by viewModel.recordingDuration.collectAsState()
     val amplitudeLevel by viewModel.amplitudeLevel.collectAsState()
     val livePitch by viewModel.livePitch.collectAsState()
@@ -87,11 +88,17 @@ fun RecordScreen(
             TopAppBar(
                 title = { Text("NoteNotes") },
                 actions = {
-                    IconButton(onClick = onNavigateToLibrary) {
-                        Icon(Icons.Filled.LibraryMusic, contentDescription = "Library")
+                    IconButton(onClick = onNavigateToLibrary, modifier = Modifier.size(52.dp)) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Filled.LibraryMusic, contentDescription = "Library", modifier = Modifier.size(20.dp))
+                            Text("Library", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                        }
                     }
-                    IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                    IconButton(onClick = onNavigateToSettings, modifier = Modifier.size(52.dp)) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Filled.Settings, contentDescription = "Settings", modifier = Modifier.size(20.dp))
+                            Text("Settings", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                        }
                     }
                 }
             )
@@ -111,6 +118,26 @@ fun RecordScreen(
                 onSelect = { viewModel.setInstrument(it) },
                 enabled = uiState == RecordViewModel.UiState.IDLE
             )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Auto-transcribe toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(0.7f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "Auto-transcribe",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Switch(
+                    checked = autoTranscribe,
+                    onCheckedChange = { viewModel.setAutoTranscribe(it) },
+                    enabled = uiState == RecordViewModel.UiState.IDLE
+                )
+            }
 
             Spacer(modifier = Modifier.height(48.dp))
 
@@ -146,7 +173,7 @@ fun RecordScreen(
                     CircularProgressIndicator()
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Transcribing...",
+                        text = if (autoTranscribe) "Transcribing..." else "Saving...",
                         style = MaterialTheme.typography.bodyLarge
                     )
                 }

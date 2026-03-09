@@ -65,15 +65,48 @@ class MusicXmlGenerator {
         file.writeText(xml)
     }
 
+    // ── Standard-duration helpers (same logic as MusicXmlSanitizer) ─────────
+
+    private data class StdDur(val ticks: Int, val typeName: String, val dotted: Boolean)
+
+    private fun standardDurations(div: Int): List<StdDur> = listOfNotNull(
+        StdDur(div * 4, "whole", false),
+        StdDur(div * 3, "half", true),
+        StdDur(div * 2, "half", false),
+        if (div * 3 % 2 == 0) StdDur(div * 3 / 2, "quarter", true) else null,
+        if (div % 1 == 0) StdDur(div, "quarter", false) else null,
+        if (div * 3 % 4 == 0) StdDur(div * 3 / 4, "eighth", true) else null,
+        if (div % 2 == 0) StdDur(div / 2, "eighth", false) else null,
+        if (div % 4 == 0) StdDur(div / 4, "16th", false) else null
+    ).filter { it.ticks > 0 }.sortedByDescending { it.ticks }
+
+    /** Greedy decomposition of [ticks] into standard durations. */
+    private fun decomposeToStandard(ticks: Int, stds: List<StdDur>): List<StdDur> {
+        val result = mutableListOf<StdDur>()
+        var rem = ticks
+        while (rem > 0) {
+            val sd = stds.firstOrNull { it.ticks <= rem }
+            if (sd != null) { result.add(sd); rem -= sd.ticks }
+            else { result.add(StdDur(rem, "16th", false)); break }
+        }
+        return result
+    }
+
     /**
      * Distribute notes into measures based on time signature.
      * Single staff with guitar technical notation (<string>/<fret>).
      * alphaTab handles Score+Tab rendering via staveProfile.
+     *
+     * Non-standard durations (e.g. 14, 13 ticks with divisions=4) are
+     * decomposed into tied standard-duration notes at generation time
+     * so the output is always valid for alphaTab.
      */
     private fun appendMeasures(sb: StringBuilder, result: TranscriptionResult) {
         val divisions = result.divisions
         val beatsPerMeasure = result.timeSignature.beats
         val beatType = result.timeSignature.beatType
+        val stds = standardDurations(divisions)
+        val stdSet = stds.map { it.ticks }.toSet()
         
         val ticksPerMeasure = when (beatType) {
             8 -> beatsPerMeasure * divisions / 2
@@ -102,45 +135,17 @@ class MusicXmlGenerator {
                 val remainingTicks = ticksPerMeasure - ticksInCurrentMeasure
                 
                 if (note.durationTicks <= remainingTicks) {
-                    // Note fits in current measure
-                    appendNote(sb, note, divisions, result.keySignature.fifths,
-                        tieStart = false, tieStop = pendingTieStop, isChordNote = false)
-                    // Chord notes
-                    if (note.isChord) {
-                        for ((i, chordPitch) in note.chordPitches.withIndex()) {
-                            val pos = note.chordStringFrets.getOrNull(i)
-                            val chordNote = note.copy(
-                                midiPitch = chordPitch,
-                                guitarString = pos?.first,
-                                guitarFret = pos?.second,
-                                chordPitches = emptyList(),
-                                chordStringFrets = emptyList(),
-                                chordName = null
-                            )
-                            appendNote(sb, chordNote, divisions, result.keySignature.fifths,
-                                tieStart = false, tieStop = false, isChordNote = true)
-                        }
-                    }
-                    pendingTieStop = false
-                    ticksInCurrentMeasure += note.durationTicks
-                    noteIndex++
-                } else {
-                    // Note needs to be split across measures
-                    val remainingDuration = note.durationTicks - remainingTicks
-                    
-                    if (!note.isRest) {
-                        val firstPart = note.copy(
-                            durationTicks = remainingTicks,
-                            type = ticksToType(remainingTicks, divisions),
-                            dotted = false,
-                            tiedToNext = true
-                        )
-                        appendNote(sb, firstPart, divisions, result.keySignature.fifths,
-                            tieStart = true, tieStop = pendingTieStop, isChordNote = false)
+                    // Note fits in current measure — decompose if non-standard
+                    if (note.durationTicks in stdSet) {
+                        // Standard duration — emit directly
+                        val std = stds.first { it.ticks == note.durationTicks }
+                        val fixedNote = note.copy(type = std.typeName, dotted = std.dotted)
+                        appendNote(sb, fixedNote, divisions, result.keySignature.fifths,
+                            tieStart = false, tieStop = pendingTieStop, isChordNote = false)
                         if (note.isChord) {
                             for ((i, chordPitch) in note.chordPitches.withIndex()) {
                                 val pos = note.chordStringFrets.getOrNull(i)
-                                val chordNote = firstPart.copy(
+                                val chordNote = fixedNote.copy(
                                     midiPitch = chordPitch,
                                     guitarString = pos?.first,
                                     guitarFret = pos?.second,
@@ -149,7 +154,83 @@ class MusicXmlGenerator {
                                     chordName = null
                                 )
                                 appendNote(sb, chordNote, divisions, result.keySignature.fifths,
-                                    tieStart = true, tieStop = false, isChordNote = true)
+                                    tieStart = false, tieStop = pendingTieStop, isChordNote = true)
+                            }
+                        }
+                    } else {
+                        // Non-standard duration — decompose into tied standard parts
+                        val parts = decomposeToStandard(note.durationTicks, stds)
+                        for ((pi, sd) in parts.withIndex()) {
+                            val isFirst = pi == 0
+                            val isLast = pi == parts.size - 1
+                            val partTieStart = if (note.isRest) false else !isLast
+                            val partTieStop = if (note.isRest) false
+                                              else if (isFirst) pendingTieStop else true
+                            val partNote = note.copy(
+                                durationTicks = sd.ticks,
+                                type = sd.typeName,
+                                dotted = sd.dotted,
+                                tiedToNext = partTieStart
+                            )
+                            appendNote(sb, partNote, divisions, result.keySignature.fifths,
+                                tieStart = partTieStart, tieStop = partTieStop,
+                                isChordNote = false)
+                            if (note.isChord) {
+                                for ((i, chordPitch) in note.chordPitches.withIndex()) {
+                                    val pos = note.chordStringFrets.getOrNull(i)
+                                    val chordNote = partNote.copy(
+                                        midiPitch = chordPitch,
+                                        guitarString = pos?.first,
+                                        guitarFret = pos?.second,
+                                        chordPitches = emptyList(),
+                                        chordStringFrets = emptyList(),
+                                        chordName = null
+                                    )
+                                    appendNote(sb, chordNote, divisions, result.keySignature.fifths,
+                                        tieStart = partTieStart, tieStop = partTieStop,
+                                        isChordNote = true)
+                                }
+                            }
+                        }
+                    }
+                    pendingTieStop = false
+                    ticksInCurrentMeasure += note.durationTicks
+                    noteIndex++
+                } else {
+                    // Note needs to be split across measures — remaining piece also
+                    // gets decomposed if non-standard (handled on next iteration)
+                    val remainingDuration = note.durationTicks - remainingTicks
+                    
+                    if (!note.isRest) {
+                        // Decompose the part that fits this measure
+                        val fitTicks = if (remainingTicks in stdSet) remainingTicks else remainingTicks
+                        val fitParts = decomposeToStandard(fitTicks, stds)
+                        for ((pi, sd) in fitParts.withIndex()) {
+                            val isFirst = pi == 0
+                            val isLast = pi == fitParts.size - 1
+                            val partTieStop = if (isFirst) pendingTieStop else true
+                            val firstPart = note.copy(
+                                durationTicks = sd.ticks,
+                                type = sd.typeName,
+                                dotted = sd.dotted,
+                                tiedToNext = true
+                            )
+                            appendNote(sb, firstPart, divisions, result.keySignature.fifths,
+                                tieStart = true, tieStop = partTieStop, isChordNote = false)
+                            if (note.isChord) {
+                                for ((i, chordPitch) in note.chordPitches.withIndex()) {
+                                    val pos = note.chordStringFrets.getOrNull(i)
+                                    val chordNote = firstPart.copy(
+                                        midiPitch = chordPitch,
+                                        guitarString = pos?.first,
+                                        guitarFret = pos?.second,
+                                        chordPitches = emptyList(),
+                                        chordStringFrets = emptyList(),
+                                        chordName = null
+                                    )
+                                    appendNote(sb, chordNote, divisions, result.keySignature.fifths,
+                                        tieStart = true, tieStop = partTieStop, isChordNote = true)
+                                }
                             }
                         }
                         pendingTieStop = false
@@ -162,16 +243,21 @@ class MusicXmlGenerator {
                         )
                         pendingTieStop = true
                     } else {
-                        val restPart = note.copy(
-                            durationTicks = remainingTicks,
-                            type = ticksToType(remainingTicks, divisions)
-                        )
-                        appendNote(sb, restPart, divisions, result.keySignature.fifths,
-                            tieStart = false, tieStop = false, isChordNote = false)
+                        val fitParts = decomposeToStandard(remainingTicks, stds)
+                        for ((_, sd) in fitParts.withIndex()) {
+                            val restPart = note.copy(
+                                durationTicks = sd.ticks,
+                                type = sd.typeName,
+                                dotted = sd.dotted
+                            )
+                            appendNote(sb, restPart, divisions, result.keySignature.fifths,
+                                tieStart = false, tieStop = false, isChordNote = false)
+                        }
                         
                         notes[noteIndex] = note.copy(
                             durationTicks = remainingDuration,
-                            type = ticksToType(remainingDuration, divisions)
+                            type = ticksToType(remainingDuration, divisions),
+                            dotted = false
                         )
                     }
                     ticksInCurrentMeasure = ticksPerMeasure
@@ -182,14 +268,18 @@ class MusicXmlGenerator {
             // Fill remaining space with rests if needed
             if (ticksInCurrentMeasure < ticksPerMeasure && noteIndex >= notes.size) {
                 val restTicks = ticksPerMeasure - ticksInCurrentMeasure
-                val restNote = MusicalNote(
-                    midiPitch = 0,
-                    durationTicks = restTicks,
-                    type = ticksToType(restTicks, divisions),
-                    isRest = true
-                )
-                appendNote(sb, restNote, divisions, result.keySignature.fifths,
-                    tieStart = false, tieStop = false, isChordNote = false)
+                val restParts = decomposeToStandard(restTicks, stds)
+                for (sd in restParts) {
+                    val restNote = MusicalNote(
+                        midiPitch = 0,
+                        durationTicks = sd.ticks,
+                        type = sd.typeName,
+                        dotted = sd.dotted,
+                        isRest = true
+                    )
+                    appendNote(sb, restNote, divisions, result.keySignature.fifths,
+                        tieStart = false, tieStop = false, isChordNote = false)
+                }
                 ticksInCurrentMeasure = ticksPerMeasure
             }
             
@@ -227,10 +317,13 @@ class MusicXmlGenerator {
             sb.appendLine("""          <clef-octave-change>$clefOctaveChange</clef-octave-change>""")
         }
         sb.appendLine("""        </clef>""")
-        // Standard guitar tuning for tab staff rendering
+        // Guitar tab: <staff-lines>6 + <staff-tuning> tells alphaTab to show
+        // the tablature staff.  The scoreLoaded handler in preview.html then
+        // re-enables standard notation and resets standardNotationLineCount=5
+        // so both staves render correctly (ScoreTab staveProfile).
         sb.appendLine("""        <staff-details>""")
         sb.appendLine("""          <staff-lines>6</staff-lines>""")
-        // Tuning from low to high: E2, A2, D3, G3, B3, E4
+        // Standard guitar tuning low→high: E2 A2 D3 G3 B3 E4
         sb.appendLine("""          <staff-tuning line="1">""")
         sb.appendLine("""            <tuning-step>E</tuning-step>""")
         sb.appendLine("""            <tuning-octave>2</tuning-octave>""")
@@ -316,6 +409,9 @@ class MusicXmlGenerator {
             sb.appendLine("""        <tie type="stop"/>""")
         }
         
+        // Voice — required by alphaTab's MusicXML parser to initialise voice arrays
+        sb.appendLine("""        <voice>1</voice>""")
+        
         sb.appendLine("""        <type>${note.type}</type>""")
         
         if (note.dotted) {
@@ -363,14 +459,17 @@ class MusicXmlGenerator {
 
     /**
      * Convert duration ticks to note type name.
+     * Returns the largest standard type whose base duration fits within [ticks].
      */
     private fun ticksToType(ticks: Int, divisions: Int): String {
-        // divisions = ticks per quarter note
         val ratio = ticks.toDouble() / divisions
         return when {
             ratio >= 4.0 -> "whole"
+            ratio >= 3.0 -> "half"      // dotted half = 3.0
             ratio >= 2.0 -> "half"
+            ratio >= 1.5 -> "quarter"   // dotted quarter = 1.5
             ratio >= 1.0 -> "quarter"
+            ratio >= 0.75 -> "eighth"   // dotted eighth = 0.75
             ratio >= 0.5 -> "eighth"
             else -> "16th"
         }
