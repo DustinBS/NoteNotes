@@ -15,11 +15,9 @@ import com.notenotes.export.FileExporter
 import com.notenotes.export.MidiWriter
 import com.notenotes.export.MusicXmlGenerator
 import com.notenotes.export.MusicXmlSanitizer
-import com.notenotes.export.NntFile
 import com.notenotes.model.InstrumentProfile
 import com.notenotes.model.MelodyIdea
 import com.notenotes.model.MusicalNote
-import com.notenotes.model.NntTranscription
 import com.notenotes.model.TranscriptionResult
 import com.notenotes.model.KeySignature
 import com.notenotes.model.TimeSignature
@@ -72,20 +70,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     private val _audioDurationMs = MutableStateFlow(0)
     val audioDurationMs: StateFlow<Int> = _audioDurationMs
 
-    /**
-     * Number of synthetic rest beats that MusicXmlGenerator inserts before
-     * the first real note (to preserve leading silence).  PreviewScreen adds
-     * this offset to the note index so the alphaTab cursor highlights the
-     * correct beat in the rendered score.
-     *
-     * FIX HISTORY: Added to fix sheet-music cursor desync when the first
-     * note has timePositionMs > 0.  Without this offset the cursor would
-     * be N beats behind because the rendered score has N extra rest beats
-     * that don't exist in notesList.
-     */
-    private val _leadingRestBeatCount = MutableStateFlow(0)
-    val leadingRestBeatCount: StateFlow<Int> = _leadingRestBeatCount
-
     private val _isRetranscribing = MutableStateFlow(false)
     val isRetranscribing: StateFlow<Boolean> = _isRetranscribing
 
@@ -120,11 +104,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     // Rename dialog state
     private val _isRenameDialogOpen = MutableStateFlow(false)
     val isRenameDialogOpen: StateFlow<Boolean> = _isRenameDialogOpen
-
-    // Save-to-device conflict state
-    data class SaveConflict(val folderName: String)
-    private val _saveConflict = MutableStateFlow<SaveConflict?>(null)
-    val saveConflict: StateFlow<SaveConflict?> = _saveConflict
 
     // Tab state (persists across navigation)
     private val _selectedTab = MutableStateFlow(2)  // 0=Sheet, 1=Notes, 2=Waveform
@@ -171,7 +150,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                         musicXmlGenerator.generateMusicXml(result)
                     )
                     _notesList.value = notes
-                    refreshLeadingRestBeatCount()
                     Log.d(TAG, "loadIdea: MusicXML regenerated successfully")
                 } else {
                     // Fallback: try loading from saved file (no notes in DB)
@@ -181,6 +159,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                         if (content.trimStart().startsWith("<?xml") || content.trimStart().startsWith("<score-partwise")) {
                             Log.d(TAG, "loadIdea: Loading MusicXML from file (${xmlFile.length()} bytes)")
                             // Patch legacy files: inject <voice>1</voice> if missing
+                            // (required by alphaTab to initialise voice arrays)
                             if (!content.contains("<voice>")) {
                                 content = content.replace(
                                     Regex("(<duration>[^<]*</duration>)"),
@@ -188,62 +167,33 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                                 )
                                 Log.d(TAG, "loadIdea: Patched legacy MusicXML with <voice> elements")
                             }
+                            // Sanitize non-standard durations (fixes alphaTab 'push' crash)
                             content = MusicXmlSanitizer.sanitize(content)
+                            // Persist all fixes so they don't need patching on every load
                             try { xmlFile.writeText(content) } catch (_: Exception) {}
+                            _musicXml.value = content
 
-                            // Parse notes AND metadata from MusicXML
-                            val xmlParser = com.notenotes.export.MusicXmlParser()
-                            val parseResult = try {
-                                xmlParser.parse(content, melodyIdea.tempoBpm)
-                            } catch (e: Exception) {
-                                Log.e(TAG, "loadIdea: Failed to parse MusicXML", e)
-                                null
-                            }
-
-                            if (parseResult != null && parseResult.notes.isNotEmpty()) {
-                                val parsedNotes = parseResult.notes
+                            // Parse notes from MusicXML so Notes tab and Waveform annotations populate
+                            val parsedNotes = parseMusicXmlToNotes(content, melodyIdea.tempoBpm)
+                            if (parsedNotes.isNotEmpty()) {
+                                _notesList.value = parsedNotes
                                 Log.d(TAG, "loadIdea: Parsed ${parsedNotes.size} notes from MusicXML file")
 
-                                // Use metadata from XML, falling back to idea's existing values
-                                val resolvedInstrument = parseResult.instrument ?: melodyIdea.instrument
-                                val resolvedKey = parseResult.keySignature ?: melodyIdea.keySignature
-                                val resolvedTime = parseResult.timeSignature ?: melodyIdea.timeSignature
-                                val resolvedTempo = parseResult.tempoBpm ?: melodyIdea.tempoBpm
-
-                                val keySig = parseKeySignature(resolvedKey)
-                                val timeSig = parseTimeSignature(resolvedTime)
-                                val instrument = InstrumentProfile.ALL.find { it.name == resolvedInstrument }
-
-                                val result = TranscriptionResult(
+                                val keySig = parseKeySignature(melodyIdea.keySignature)
+                                val timeSig = parseTimeSignature(melodyIdea.timeSignature)
+                                val instrument = InstrumentProfile.ALL.find { it.name == melodyIdea.instrument }
+                                currentResult = TranscriptionResult(
                                     notes = parsedNotes,
                                     keySignature = keySig,
                                     timeSignature = timeSig,
-                                    tempoBpm = resolvedTempo,
+                                    tempoBpm = melodyIdea.tempoBpm,
                                     instrument = instrument
                                 )
-                                currentResult = result
-                                _notesList.value = parsedNotes
-                                refreshLeadingRestBeatCount()
 
-                                // Regenerate XML from parsed notes for consistency
-                                // (so first-load and re-open show the same render)
-                                _musicXml.value = MusicXmlSanitizer.sanitize(
-                                    musicXmlGenerator.generateMusicXml(result)
-                                )
-
-                                // Persist parsed notes AND extracted metadata
-                                val updatedIdea = melodyIdea.copy(
-                                    notes = gson.toJson(parsedNotes),
-                                    instrument = resolvedInstrument,
-                                    keySignature = resolvedKey,
-                                    timeSignature = resolvedTime,
-                                    tempoBpm = resolvedTempo
-                                )
+                                // Persist parsed notes so future loads use the primary path
+                                val updatedIdea = melodyIdea.copy(notes = gson.toJson(parsedNotes))
                                 dao.update(updatedIdea)
                                 _idea.value = updatedIdea
-                            } else {
-                                // Parsing failed — show original XML as fallback
-                                _musicXml.value = content
                             }
                         } else {
                             Log.w(TAG, "loadIdea: File exists but doesn't look like valid MusicXML")
@@ -320,19 +270,11 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         context.startActivity(Intent.createChooser(intent, "Share MusicXML"))
     }
 
-    fun shareNnt(context: Context) {
-        val nnt = buildNntTranscription() ?: return
-        val title = _idea.value?.title ?: "melody"
-        val intent = fileExporter.shareNnt(nnt, title)
-        context.startActivity(Intent.createChooser(intent, "Share Transcription"))
-    }
-
     fun shareAll(context: Context) {
         val result = buildResult() ?: return
         val title = _idea.value?.title ?: "melody"
         val audioFile = _idea.value?.audioFilePath?.let { File(it) }
-        val nnt = buildNntTranscription()
-        val intent = fileExporter.shareAll(result, title, audioFile, nnt)
+        val intent = fileExporter.shareAll(result, title, audioFile)
         context.startActivity(Intent.createChooser(intent, "Share Files"))
     }
 
@@ -392,14 +334,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     )
                     zos.putNextEntry(ZipEntry("melody.musicxml"))
                     zos.write(xml.toByteArray())
-                    zos.closeEntry()
-                }
-
-                // NNT transcription (full-fidelity notes)
-                val nnt = buildNntTranscription()
-                if (nnt != null) {
-                    zos.putNextEntry(ZipEntry("melody.${NntTranscription.FILE_EXTENSION}"))
-                    zos.write(NntFile.toJson(nnt).toByteArray())
                     zos.closeEntry()
                 }
             }
@@ -706,38 +640,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Count how many beats the synthetic leading rest occupies in the
-     * rendered alphaTab score.  MusicXmlGenerator inserts rests when the
-     * first note has timePositionMs > 0 to preserve starting silence, but
-     * those beats don't exist in notesList.  This offset aligns the
-     * note-index-based cursor with the actual rendered beats.
-     */
-    private fun refreshLeadingRestBeatCount() {
-        val notes = _notesList.value
-        val tempoBpm = _idea.value?.tempoBpm ?: 120
-        if (notes.isEmpty()) { _leadingRestBeatCount.value = 0; return }
-        val firstTimeMs = notes.first().timePositionMs
-        if (firstTimeMs == null || firstTimeMs <= 0f) {
-            _leadingRestBeatCount.value = 0; return
-        }
-        val divisions = 4
-        val tickMs = 60000.0 / tempoBpm / divisions
-        val gapTicks = Math.round(firstTimeMs / tickMs).toInt()
-        if (gapTicks <= 0) { _leadingRestBeatCount.value = 0; return }
-        // Mirror MusicXmlGenerator.decomposeToStandard: greedy decomposition
-        // into standard note values (divisions=4).
-        val stdTicks = listOf(16, 12, 8, 6, 4, 3, 2, 1)
-        var remaining = gapTicks
-        var count = 0
-        while (remaining > 0) {
-            val sd = stdTicks.firstOrNull { it <= remaining }
-            if (sd != null) { remaining -= sd; count++ }
-            else { count++; break }
-        }
-        _leadingRestBeatCount.value = count
-    }
-
-    /**
      * Check if the edit cursor is currently inside a note (for showing split button).
      */
     fun isCursorInsideNote(): Boolean {
@@ -814,93 +716,20 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Save all files to device. Uses configurable save path from Settings,
-     * falling back to Downloads/NoteNotes. Files are saved into an idea-named subfolder.
-     * If the subfolder already exists, prompts user to rename or overwrite.
+     * Save all files (MIDI, MusicXML, Audio) to device Downloads/NoteNotes/.
+     * Scans saved files so they appear immediately in file pickers.
      */
     fun saveToDevice(context: Context) {
-        val melodyIdea = _idea.value ?: return
-        val folderName = melodyIdea.title
-        val saveDir = resolveSaveDir(context)
-        val ideaDir = File(saveDir, folderName)
-
-        if (ideaDir.exists() && ideaDir.list()?.isNotEmpty() == true) {
-            // Folder has content — prompt user
-            _saveConflict.value = SaveConflict(folderName)
-        } else {
-            performSave(context, folderName, overwrite = false)
-        }
-    }
-
-    /** User chose to overwrite existing folder. */
-    fun confirmSaveOverwrite(context: Context) {
-        val conflict = _saveConflict.value ?: return
-        _saveConflict.value = null
-        performSave(context, conflict.folderName, overwrite = true)
-    }
-
-    /** User chose a new folder name. */
-    fun confirmSaveRename(context: Context, newName: String) {
-        _saveConflict.value = null
-        performSave(context, newName.trim(), overwrite = false)
-    }
-
-    /** User cancelled save. */
-    fun cancelSave() {
-        _saveConflict.value = null
-    }
-
-    /** Resolve the base save directory from SharedPreferences or default Downloads/NoteNotes. */
-    private fun resolveSaveDir(context: Context): File {
-        val prefs = context.getSharedPreferences("notenotes_settings", Context.MODE_PRIVATE)
-        val uriStr = prefs.getString(KEY_SAVE_PATH_URI, null)
-        if (uriStr != null) {
-            try {
-                val treeUri = android.net.Uri.parse(uriStr)
-                val path = getPathFromTreeUri(treeUri)
-                if (path != null) {
-                    val dir = File(path)
-                    if (dir.exists() || dir.mkdirs()) return dir
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Custom save path unavailable, using default", e)
-            }
-        }
-        return File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "NoteNotes"
-        )
-    }
-
-    /** Extract a real filesystem path from a tree URI (works for primary storage). */
-    private fun getPathFromTreeUri(uri: android.net.Uri): String? {
-        val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
-        val parts = docId.split(":")
-        return when {
-            parts.size == 2 && parts[0] == "primary" -> {
-                "${Environment.getExternalStorageDirectory().absolutePath}/${parts[1]}"
-            }
-            parts.size == 1 && parts[0] == "primary" -> {
-                Environment.getExternalStorageDirectory().absolutePath
-            }
-            else -> null
-        }
-    }
-
-    /** Actually write all files into [folderName] under the resolved save dir. */
-    private fun performSave(context: Context, folderName: String, overwrite: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val melodyIdea = _idea.value ?: return@launch
-                val saveDir = resolveSaveDir(context)
-                val ideaDir = File(saveDir, folderName)
-
-                if (overwrite && ideaDir.exists()) {
-                    ideaDir.listFiles()?.forEach { it.delete() }
-                }
-                ideaDir.mkdirs()
-
                 val title = melodyIdea.title
+                val downloadsDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    "NoteNotes"
+                )
+                downloadsDir.mkdirs()
+
                 var savedCount = 0
                 val savedPaths = mutableListOf<String>()
                 val savedMimes = mutableListOf<String>()
@@ -910,7 +739,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     val src = File(path)
                     if (src.exists()) {
                         val ext = src.extension.ifEmpty { "wav" }
-                        val dest = File(ideaDir, "$title.$ext")
+                        val dest = File(downloadsDir, "$title.$ext")
                         src.copyTo(dest, overwrite = true)
                         savedPaths.add(dest.absolutePath)
                         savedMimes.add(when (ext.lowercase()) {
@@ -922,48 +751,28 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                // Save MIDI — copy existing or generate fresh from notes
-                val midiSrc = melodyIdea.midiFilePath?.let { File(it) }
-                if (midiSrc != null && midiSrc.exists()) {
-                    val dest = File(ideaDir, "$title.mid")
-                    midiSrc.copyTo(dest, overwrite = true)
-                    savedPaths.add(dest.absolutePath)
-                    savedMimes.add("audio/midi")
-                    savedCount++
-                } else {
-                    val result = buildResult()
-                    if (result != null) {
-                        val dest = File(ideaDir, "$title.mid")
-                        midiWriter.writeToFile(result, dest)
+                // Save MIDI
+                melodyIdea.midiFilePath?.let { path ->
+                    val src = File(path)
+                    if (src.exists()) {
+                        val dest = File(downloadsDir, "$title.mid")
+                        src.copyTo(dest, overwrite = true)
                         savedPaths.add(dest.absolutePath)
                         savedMimes.add("audio/midi")
                         savedCount++
                     }
                 }
 
-                // Save MusicXML — always regenerate fresh from current notes
-                // so the exported XML reflects the latest note data (pitches,
-                // durations, chords, etc.) rather than a potentially stale file.
-                val result = buildResult()
-                if (result != null) {
-                    val xml = MusicXmlSanitizer.sanitize(
-                        musicXmlGenerator.generateMusicXml(result)
-                    )
-                    val dest = File(ideaDir, "$title.musicxml")
-                    dest.writeText(xml)
-                    savedPaths.add(dest.absolutePath)
-                    savedMimes.add("application/xml")
-                    savedCount++
-                }
-
-                // Save NNT transcription (full-fidelity notes)
-                val nnt = buildNntTranscription()
-                if (nnt != null) {
-                    val dest = File(ideaDir, "$title.${NntTranscription.FILE_EXTENSION}")
-                    NntFile.write(nnt, dest)
-                    savedPaths.add(dest.absolutePath)
-                    savedMimes.add(NntTranscription.MIME_TYPE)
-                    savedCount++
+                // Save MusicXML
+                melodyIdea.musicXmlFilePath?.let { path ->
+                    val src = File(path)
+                    if (src.exists()) {
+                        val dest = File(downloadsDir, "$title.musicxml")
+                        src.copyTo(dest, overwrite = true)
+                        savedPaths.add(dest.absolutePath)
+                        savedMimes.add("application/xml")
+                        savedCount++
+                    }
                 }
 
                 // Scan saved files so they appear in the SAF file picker immediately
@@ -976,19 +785,14 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
 
-                // Build a readable dir label for the toast
-                val dirLabel = ideaDir.absolutePath
-                    .replace(Environment.getExternalStorageDirectory().absolutePath, "")
-                    .trimStart('/')
-
                 kotlinx.coroutines.withContext(Dispatchers.Main) {
                     android.widget.Toast.makeText(
                         context,
-                        "Saved $savedCount files to $dirLabel",
+                        "Saved $savedCount files to Downloads/NoteNotes",
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
-                Log.i(TAG, "saveToDevice: Saved $savedCount files to ${ideaDir.absolutePath}")
+                Log.i(TAG, "saveToDevice: Saved $savedCount files to ${downloadsDir.absolutePath}")
             } catch (e: Exception) {
                 Log.e(TAG, "saveToDevice: Error", e)
                 kotlinx.coroutines.withContext(Dispatchers.Main) {
@@ -1003,19 +807,19 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Open the save folder in the system file manager.
+     * Open the Downloads/NoteNotes folder in the system file manager.
      */
     fun openInFileManager(context: Context) {
         try {
-            val saveDir = resolveSaveDir(context)
-            if (!saveDir.exists()) saveDir.mkdirs()
+            val downloadsDir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                "NoteNotes"
+            )
+            if (!downloadsDir.exists()) downloadsDir.mkdirs()
 
-            // Build a documents provider URI from the path
-            val relPath = saveDir.absolutePath
-                .replace(Environment.getExternalStorageDirectory().absolutePath + "/", "")
-            val encodedPath = relPath.replace("/", "%2F")
+            // Try the standard Documents UI
             val uri = android.net.Uri.parse(
-                "content://com.android.externalstorage.documents/document/primary:$encodedPath"
+                "content://com.android.externalstorage.documents/document/primary:Download%2FNoteNotes"
             )
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "vnd.android.document/directory")
@@ -1071,36 +875,17 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Update the tempo BPM, re-quantizing note durations to maintain the same
-     * absolute timing relative to the audio. Changing BPM should NOT stretch or
-     * desync notes — instead, durationTicks are scaled so real-world positions
-     * remain identical. The sheet music notation changes (different note values)
-     * but the audio sync is preserved.
-     *
-     * Formula: newTicks = oldTicks * newBpm / oldBpm
-     * Proof:   oldMs = oldTicks * (60000 / oldBpm / 4)
-     *          newMs = newTicks * (60000 / newBpm / 4)
-     *                = (oldTicks * newBpm / oldBpm) * (60000 / newBpm / 4)
-     *                = oldTicks * 60000 / (oldBpm * 4) = oldMs  ✓
+     * Update the tempo BPM and regenerate MusicXML.
      */
     fun updateTempoBpm(bpm: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             val melodyIdea = _idea.value ?: return@launch
-            val oldBpm = melodyIdea.tempoBpm
-            if (bpm == oldBpm) return@launch
-
-            val scaledNotes = _notesList.value.map { note ->
-                val newTicks = Math.round(note.durationTicks.toDouble() * bpm / oldBpm).toInt()
-                    .coerceAtLeast(1)
-                note.copy(durationTicks = newTicks)
-            }
-
             val updated = melodyIdea.copy(tempoBpm = bpm)
             dao.update(updated)
             _idea.value = updated
-            // Regenerate MusicXML with new tempo and re-quantized notes
-            updateNotesAndRefresh(scaledNotes)
-            Log.i(TAG, "updateTempoBpm: Changed $oldBpm → $bpm, re-quantized ${scaledNotes.size} notes")
+            // Regenerate MusicXML with new tempo
+            updateNotesAndRefresh(_notesList.value)
+            Log.i(TAG, "updateTempoBpm: Changed to $bpm")
         }
     }
 
@@ -1115,71 +900,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
 
     fun setWindowSizeSec(sec: Float) {
         _windowSizeSec.value = sec.coerceIn(1f, 30f)
-    }
-
-    /**
-     * Auto-detect BPM from the current note list using inter-onset interval (IOI) analysis.
-     * Examines time gaps between consecutive note onsets and finds the beat period that
-     * best explains the majority of intervals (within a tolerance window).
-     * Returns a BPM in the 30–300 range, or null if detection fails.
-     */
-    fun autoDetectBpm(): Int? {
-        val notes = _notesList.value
-        if (notes.size < 3) return null
-
-        val currentBpm = _idea.value?.tempoBpm ?: 120
-        val tickMs = 60000.0 / currentBpm / 4.0 // ms per tick at current BPM
-
-        // Compute note onset times in ms
-        val onsets = mutableListOf<Double>()
-        var cumMs = 0.0
-        for (note in notes) {
-            if (note.isRest) {
-                cumMs += note.durationTicks * tickMs
-                continue
-            }
-            val onsetMs = if (note.isManual && note.timePositionMs != null) {
-                note.timePositionMs.toDouble()
-            } else {
-                cumMs
-            }
-            onsets.add(onsetMs)
-            cumMs = onsetMs + note.durationTicks * tickMs
-        }
-
-        if (onsets.size < 3) return null
-
-        // Compute inter-onset intervals
-        val iois = mutableListOf<Double>()
-        for (i in 1 until onsets.size) {
-            val ioi = onsets[i] - onsets[i - 1]
-            if (ioi > 50) iois.add(ioi) // ignore intervals < 50ms (likely ornaments)
-        }
-        if (iois.isEmpty()) return null
-
-        // Test candidate BPMs from 30–300 and score each
-        var bestBpm = 120
-        var bestScore = -1.0
-        for (candidateBpm in 30..300) {
-            val beatMs = 60000.0 / candidateBpm
-            var score = 0.0
-            for (ioi in iois) {
-                // How close is this IOI to an integer multiple of the beat?
-                val ratio = ioi / beatMs
-                val nearestInt = Math.round(ratio).toDouble()
-                if (nearestInt < 1) continue
-                val deviation = Math.abs(ratio - nearestInt) / nearestInt
-                if (deviation < 0.15) { // 15% tolerance
-                    score += 1.0 / nearestInt // weight direct beats higher than multiples
-                }
-            }
-            if (score > bestScore) {
-                bestScore = score
-                bestBpm = candidateBpm
-            }
-        }
-
-        return if (bestScore > 0) bestBpm else null
     }
 
     /**
@@ -1216,7 +936,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
      */
     private fun updateNotesAndRefresh(notes: List<MusicalNote>) {
         _notesList.value = notes
-        refreshLeadingRestBeatCount()
 
         // Cancel any pending save — the latest edit wins
         saveJob?.cancel()
@@ -1389,7 +1108,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 _idea.value = updatedIdea
                 _musicXml.value = xmlContent
                 _notesList.value = result.notes
-                refreshLeadingRestBeatCount()
 
                 Log.i(TAG, "retranscribe: Done — ${result.notes.size} notes, " +
                     "key=${result.keySignature}, time=${result.timeSignature}, " +
@@ -1440,24 +1158,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Build an [NntTranscription] from the current idea's notes + metadata.
-     * Includes the audio duration so import can compare without rounding errors.
-     */
-    private fun buildNntTranscription(): NntTranscription? {
-        val melodyIdea = _idea.value ?: return null
-        val notesJson = melodyIdea.notes ?: return null
-        val audioDur = _audioDurationMs.value.let { if (it > 0) it.toLong() else null }
-        return NntFile.fromNotesJson(
-            notesJson = notesJson,
-            instrument = melodyIdea.instrument,
-            tempoBpm = melodyIdea.tempoBpm,
-            keySignature = melodyIdea.keySignature,
-            timeSignature = melodyIdea.timeSignature,
-            durationMs = audioDur
-        )
-    }
-
-    /**
      * Load waveform data from an audio file for visualization.
      * Supports WAV natively, and MP3/M4A/OGG/FLAC via MediaCodec fallback.
      */
@@ -1497,5 +1197,149 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     override fun onCleared() {
         super.onCleared()
         audioPlayer.release()
+    }
+
+    /**
+     * Parse a MusicXML string into a list of MusicalNotes.
+     * Properly merges chord notes into a single MusicalNote with chordPitches/chordStringFrets.
+     * Tie-stop-only notes are skipped (they're continuations, not new events).
+     */
+    private fun parseMusicXmlToNotes(xml: String, tempoBpm: Int): List<MusicalNote> {
+        val notes = mutableListOf<MusicalNote>()
+        try {
+            val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+            val builder = factory.newDocumentBuilder()
+            val doc = builder.parse(xml.byteInputStream())
+            doc.documentElement.normalize()
+
+            // Get divisions (ticks per quarter note) from first <attributes>
+            var divisions = 1
+            val attrNodes = doc.getElementsByTagName("divisions")
+            if (attrNodes.length > 0) {
+                divisions = attrNodes.item(0).textContent.trim().toIntOrNull() ?: 1
+            }
+
+            val noteNodes = doc.getElementsByTagName("note")
+            val msPerBeat = 60_000.0 / tempoBpm
+            var currentTimeMs = 0.0
+
+            for (i in 0 until noteNodes.length) {
+                val noteEl = noteNodes.item(i) as org.w3c.dom.Element
+
+                val isChord = noteEl.getElementsByTagName("chord").length > 0
+                val isRest = noteEl.getElementsByTagName("rest").length > 0
+
+                // Duration in divisions
+                val durationEl = noteEl.getElementsByTagName("duration")
+                val durationTicks = if (durationEl.length > 0)
+                    durationEl.item(0).textContent.trim().toIntOrNull() ?: divisions
+                else divisions
+
+                // Note type
+                val typeEl = noteEl.getElementsByTagName("type")
+                val noteType = if (typeEl.length > 0) typeEl.item(0).textContent.trim() else "quarter"
+
+                val dotted = noteEl.getElementsByTagName("dot").length > 0
+
+                // Tie analysis: check if this is a tie-stop-only (continuation, not a new note event)
+                val tieNodes = noteEl.getElementsByTagName("tie")
+                var hasTieStart = false
+                var hasTieStop = false
+                for (t in 0 until tieNodes.length) {
+                    val tieEl = tieNodes.item(t) as org.w3c.dom.Element
+                    when (tieEl.getAttribute("type")) {
+                        "start" -> hasTieStart = true
+                        "stop" -> hasTieStop = true
+                    }
+                }
+                // Skip tie-stop-only notes (continuations) — they don't represent new note events
+                // But still advance time for non-chord tie-stop-only notes
+                if (hasTieStop && !hasTieStart && !isChord) {
+                    val durationMs = (durationTicks.toDouble() / divisions) * msPerBeat
+                    currentTimeMs += durationMs
+                    continue
+                }
+                // Skip chord members that are tie-stop-only
+                if (hasTieStop && !hasTieStart && isChord) {
+                    continue
+                }
+
+                // Parse MIDI pitch
+                var midiPitch = 60
+                if (!isRest) {
+                    val pitchNodes = noteEl.getElementsByTagName("pitch")
+                    if (pitchNodes.length > 0) {
+                        val pitchEl = pitchNodes.item(0) as org.w3c.dom.Element
+                        val step = pitchEl.getElementsByTagName("step").let {
+                            if (it.length > 0) it.item(0).textContent.trim() else "C"
+                        }
+                        val octave = pitchEl.getElementsByTagName("octave").let {
+                            if (it.length > 0) it.item(0).textContent.trim().toIntOrNull() ?: 4 else 4
+                        }
+                        val alter = pitchEl.getElementsByTagName("alter").let {
+                            if (it.length > 0) it.item(0).textContent.trim().toIntOrNull() ?: 0 else 0
+                        }
+                        val stepValue = when (step) {
+                            "C" -> 0; "D" -> 2; "E" -> 4; "F" -> 5
+                            "G" -> 7; "A" -> 9; "B" -> 11; else -> 0
+                        }
+                        midiPitch = (octave + 1) * 12 + stepValue + alter
+                    }
+                }
+
+                // Guitar string/fret from <technical>
+                var guitarString: Int? = null
+                var guitarFret: Int? = null
+                val techNodes = noteEl.getElementsByTagName("technical")
+                if (techNodes.length > 0) {
+                    val techEl = techNodes.item(0) as org.w3c.dom.Element
+                    val stringNodes = techEl.getElementsByTagName("string")
+                    val fretNodes = techEl.getElementsByTagName("fret")
+                    if (stringNodes.length > 0) {
+                        guitarString = stringNodes.item(0).textContent.trim().toIntOrNull()?.let { it - 1 }
+                    }
+                    if (fretNodes.length > 0) {
+                        guitarFret = fretNodes.item(0).textContent.trim().toIntOrNull()
+                    }
+                }
+
+                if (isChord && notes.isNotEmpty()) {
+                    // Merge into the previous note as a chord member
+                    val primary = notes.last()
+                    val updatedChordPitches = primary.chordPitches.toMutableList()
+                    updatedChordPitches.add(midiPitch)
+                    val updatedChordStringFrets = primary.chordStringFrets.toMutableList()
+                    if (guitarString != null && guitarFret != null) {
+                        updatedChordStringFrets.add(Pair(guitarString, guitarFret))
+                    }
+                    notes[notes.lastIndex] = primary.copy(
+                        chordPitches = updatedChordPitches,
+                        chordStringFrets = updatedChordStringFrets
+                    )
+                } else {
+                    // New note event
+                    val note = MusicalNote(
+                        midiPitch = midiPitch,
+                        durationTicks = durationTicks,
+                        type = noteType,
+                        dotted = dotted,
+                        isRest = isRest,
+                        tiedToNext = hasTieStart,
+                        guitarString = guitarString,
+                        guitarFret = guitarFret,
+                        timePositionMs = currentTimeMs.toFloat()
+                    )
+                    notes.add(note)
+
+                    // Advance time for non-chord notes
+                    val durationMs = (durationTicks.toDouble() / divisions) * msPerBeat
+                    currentTimeMs += durationMs
+                }
+            }
+            Log.d(TAG, "parseMusicXmlToNotes: Extracted ${notes.size} notes from MusicXML, total duration=${currentTimeMs.toInt()}ms")
+        } catch (e: Exception) {
+            Log.e(TAG, "parseMusicXmlToNotes: Error parsing MusicXML", e)
+        }
+        return notes
     }
 }

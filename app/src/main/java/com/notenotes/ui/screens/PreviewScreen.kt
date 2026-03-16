@@ -2,9 +2,7 @@ package com.notenotes.ui.screens
 
 import android.content.Context
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -31,9 +29,6 @@ import com.notenotes.processing.PitchAlgorithm
 import com.notenotes.model.KeySignature
 import com.notenotes.model.TimeSignature
 import com.notenotes.model.InstrumentProfile
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clipToBounds
-import kotlinx.coroutines.delay
 
 private const val PREFS_NAME = "notenotes_display"
 private const val KEY_BARS_PER_ROW = "bars_per_row"
@@ -57,7 +52,6 @@ fun PreviewScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val waveformData by viewModel.waveformData.collectAsState()
     val audioDurationMs by viewModel.audioDurationMs.collectAsState()
-    val leadingRestOffset by viewModel.leadingRestBeatCount.collectAsState()
 
     val isRetranscribing by viewModel.isRetranscribing.collectAsState()
     val selectedNoteIndex by viewModel.selectedNoteIndex.collectAsState()
@@ -70,7 +64,6 @@ fun PreviewScreen(
     val isWindowLocked by viewModel.isWindowLocked.collectAsState()
     val isRenameDialogOpen by viewModel.isRenameDialogOpen.collectAsState()
     val playbackSpeed by viewModel.playbackSpeed.collectAsState()
-    val saveConflict by viewModel.saveConflict.collectAsState()
 
     // Tab state from ViewModel (persists across navigation)
     val selectedTab by viewModel.selectedTab.collectAsState()
@@ -147,50 +140,6 @@ fun PreviewScreen(
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.closeRenameDialog() }) { Text("Cancel") }
-            }
-        )
-    }
-
-    // Save conflict dialog (folder already exists)
-    if (saveConflict != null) {
-        var renameFolderText by remember(saveConflict) {
-            mutableStateOf(saveConflict!!.folderName)
-        }
-        AlertDialog(
-            onDismissRequest = { viewModel.cancelSave() },
-            title = { Text("Folder Already Exists") },
-            text = {
-                Column {
-                    Text(
-                        "A folder named \"${saveConflict!!.folderName}\" already contains files. " +
-                            "You can overwrite the existing files or choose a different name.",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    OutlinedTextField(
-                        value = renameFolderText,
-                        onValueChange = { renameFolderText = it },
-                        label = { Text("Folder name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Row {
-                    if (renameFolderText.trim() != saveConflict!!.folderName) {
-                        TextButton(onClick = {
-                            viewModel.confirmSaveRename(context, renameFolderText)
-                        }) { Text("Save As") }
-                    } else {
-                        TextButton(onClick = {
-                            viewModel.confirmSaveOverwrite(context)
-                        }) { Text("Overwrite") }
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.cancelSave() }) { Text("Cancel") }
             }
         )
     }
@@ -300,82 +249,38 @@ fun PreviewScreen(
         )
     }
 
-    // BPM edit dialog — slider + text input + auto-detect
+    // BPM edit dialog
     if (showBpmDialog) {
         var bpmText by remember(idea?.tempoBpm) { mutableStateOf((idea?.tempoBpm ?: 120).toString()) }
-        var bpmSlider by remember(idea?.tempoBpm) { mutableStateOf((idea?.tempoBpm ?: 120).toFloat().coerceIn(20f, 300f)) }
         AlertDialog(
             onDismissRequest = { showBpmDialog = false },
             title = { Text("Tempo (BPM)") },
             text = {
                 Column {
                     Text(
-                        "Changing BPM re-quantizes note durations to keep audio sync.",
+                        "Changing BPM will affect note durations and regenerate sheet music.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    // Slider + text input combo (like the Window size control)
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                    OutlinedTextField(
+                        value = bpmText,
+                        onValueChange = { bpmText = it.filter { c -> c.isDigit() } },
+                        label = { Text("BPM") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        OutlinedTextField(
-                            value = bpmText,
-                            onValueChange = { newVal ->
-                                bpmText = newVal.filter { c -> c.isDigit() }
-                                newVal.filter { c -> c.isDigit() }.toIntOrNull()?.let { v ->
-                                    // Update slider only if within slider range; text can exceed
-                                    if (v in 20..300) bpmSlider = v.toFloat()
-                                }
-                            },
-                            label = { Text("BPM") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            modifier = Modifier.width(90.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Slider(
-                            value = bpmSlider,
-                            onValueChange = { v ->
-                                bpmSlider = v
-                                bpmText = v.toInt().toString()
-                            },
-                            valueRange = 20f..300f,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
-                    // Auto-detect button
-                    OutlinedButton(
-                        onClick = {
-                            val detected = viewModel.autoDetectBpm()
-                            if (detected != null) {
-                                bpmText = detected.toString()
-                                bpmSlider = detected.toFloat().coerceIn(20f, 300f)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.AutoFixHigh, null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Auto-Detect BPM")
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    // Quick BPM presets — horizontally scrollable
+                    // Quick BPM presets
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         listOf(60, 80, 100, 120, 140).forEach { preset ->
                             FilterChip(
                                 selected = bpmText == preset.toString(),
-                                onClick = {
-                                    bpmText = preset.toString()
-                                    bpmSlider = preset.toFloat()
-                                },
+                                onClick = { bpmText = preset.toString() },
                                 label = { Text(preset.toString()) }
                             )
                         }
@@ -386,7 +291,7 @@ fun PreviewScreen(
                 TextButton(
                     onClick = {
                         bpmText.toIntOrNull()?.let { bpm ->
-                            if (bpm in 1..999) {
+                            if (bpm in 20..300) {
                                 viewModel.updateTempoBpm(bpm)
                                 showBpmDialog = false
                             }
@@ -444,7 +349,6 @@ fun PreviewScreen(
     }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
@@ -487,11 +391,6 @@ fun PreviewScreen(
                                 text = { Text("MusicXML") },
                                 onClick = { showMenu = false; viewModel.shareMusicXml(context) },
                                 leadingIcon = { Icon(Icons.Filled.Description, contentDescription = null) }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Transcription (.nnt)") },
-                                onClick = { showMenu = false; viewModel.shareNnt(context) },
-                                leadingIcon = { Icon(Icons.Filled.LibraryMusic, contentDescription = null) }
                             )
                             DropdownMenuItem(
                                 text = { Text("Audio") },
@@ -652,9 +551,9 @@ fun PreviewScreen(
 
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-                            // ── App Settings and Info ──
+                            // ── Recording ──
                             Text(
-                                "App Settings and Info",
+                                "Recording",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
@@ -776,7 +675,6 @@ fun PreviewScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
                 .padding(padding)
         ) {
             // Error message
@@ -813,23 +711,13 @@ fun PreviewScreen(
 
             // Content based on selected tab
             // Always render SheetMusicWebView so PDF export works from any tab
-            //
-            // FIX HISTORY (cursor desync): leadingRestOffset accounts for
-            // synthetic rests that MusicXmlGenerator inserts before the first
-            // note.  Without it, the alphaTab cursor was N beats behind.
-            val sheetCurrentNoteIndex = remember(playbackProgress, notesList, leadingRestOffset) {
-                viewModel.getCurrentNoteIndex(playbackProgress) + leadingRestOffset
+            val sheetCurrentNoteIndex = remember(playbackProgress, notesList) {
+                viewModel.getCurrentNoteIndex(playbackProgress)
             }
-            // FIX HISTORY (tab flicker): .background() and .clipToBounds()
-            // prevent the WebView from flashing a white rectangle when
-            // switching away from the Sheet tab and back.  containerColor
-            // on the Scaffold fills the gap for the brief layout pass.
             Box(
                 modifier = Modifier
                     .weight(if (selectedTab == 0) 1f else 0.001f)
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.background)
-                    .clipToBounds()
                     .then(if (selectedTab != 0) Modifier.height(0.dp) else Modifier)
             ) {
                 if (musicXml != null) {
