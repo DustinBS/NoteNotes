@@ -1,85 +1,63 @@
 package com.notenotes.model
 
+import com.google.gson.*
+import com.google.gson.annotations.JsonAdapter
 import com.notenotes.util.GuitarUtils
+import java.lang.reflect.Type
 
+@JsonAdapter(MusicalNoteAdapter::class)
 data class MusicalNote(
-    val midiPitch: Int,          // 0-127 (primary/lowest pitch)
+    val pitches: List<Int>,      // 0-127 MIDI pitches. Single notes have size=1. Chords > 1.
     val durationTicks: Int,      // in divisions (e.g., quarter = 1 division)
     val type: String,            // "whole", "half", "quarter", "eighth", "16th"
     val dotted: Boolean = false,
     val isRest: Boolean = false,
     val tiedToNext: Boolean = false,
     val velocity: Int = 80,      // 0-127, default mezzo-forte
-    val chordPitches: List<Int> = emptyList(), // additional MIDI pitches for chord notes (excludes midiPitch)
-    val chordStringFrets: List<Pair<Int, Int>> = emptyList(), // parallel to chordPitches: (guitarString, guitarFret) per chord note
+    val tabPositions: List<Pair<Int, Int>> = emptyList(), // parallel to pitches: (guitarString, guitarFret) per note
     val chordName: String? = null, // e.g., "Am", "G7" — null for single notes
     // Guitar tablature — hand-crafted ground truth (only set for manually added notes)
-    val guitarString: Int? = null,  // 0-based index (0=Low E/6th, 5=High E/1st), null for auto-transcribed
-    val guitarFret: Int? = null,    // fret number 0–24, null for auto-transcribed
     val isManual: Boolean = false,  // true if manually annotated (guaranteed correct)
     val timePositionMs: Float? = null // precise time position in audio (ms), ground truth for manual notes
 ) {
     /** True if this note is part of a chord (multiple simultaneous pitches). */
-    val isChord: Boolean get() = (chordPitches ?: emptyList()).isNotEmpty()
+    val isChord: Boolean get() = pitches.size > 1
 
     /** All MIDI pitches in this note/chord, sorted ascending. */
-    val allPitches: List<Int> get() {
-        val cp = chordPitches ?: emptyList()
-        return if (cp.isEmpty()) listOf(midiPitch)
-        else (listOf(midiPitch) + cp).sorted()
-    }
+    val allPitches: List<Int> get() = pitches.sorted()
 
     /** True if this note has guitar tablature information. */
-    val hasTab: Boolean get() = guitarString != null && guitarFret != null
+    val hasTab: Boolean get() = tabPositions.isNotEmpty()
 
     /** True if this chord has multiple notes assigned to the same guitar string. */
     val hasDuplicateStrings: Boolean get() {
         if (!isChord) return false
-        val csf = chordStringFrets ?: emptyList()
-        val allStrings = mutableListOf(guitarString ?: 0)
-        csf.forEach { allStrings.add(it.first) }
+        val allStrings = tabPositions.map { it.first }
         return allStrings.size != allStrings.toSet().size
     }
 
-    /** Null-safe accessor for chordStringFrets (Gson can set it to null). */
-    val safeChordStringFrets: List<Pair<Int, Int>> get() = chordStringFrets ?: emptyList()
+    /** Null-safe accessor for tabPositions (Gson can set it to null if not using adapter). */
+    val safeTabPositions: List<Pair<Int, Int>> get() = tabPositions
 
     /**
      * Sanitize this note after Gson deserialization.
-     * - Ensures chordStringFrets is non-null
-     * - Derives guitarString/guitarFret from MIDI if missing
-     * - Populates missing chordStringFrets from chord MIDI pitches
      */
     fun sanitized(): MusicalNote {
-        val cp = chordPitches ?: emptyList()
-        val csf = chordStringFrets ?: emptyList()
+        val p = pitches
+        val tps = tabPositions
 
-        // Derive primary note's string/fret if missing
-        val derivedString: Int?
-        val derivedFret: Int?
-        if (guitarString == null || guitarFret == null) {
-            val pos = if (!isRest) GuitarUtils.fromMidi(midiPitch) else null
-            derivedString = pos?.first ?: guitarString
-            derivedFret = pos?.second ?: guitarFret
-        } else {
-            derivedString = guitarString
-            derivedFret = guitarFret
-        }
-
-        // Ensure chordStringFrets has entries for all chordPitches
-        val fixedCsf = if (csf.size < cp.size) {
-            cp.mapIndexed { i, pitch ->
-                csf.getOrNull(i) ?: (GuitarUtils.fromMidi(pitch) ?: Pair(0, 0))
+        // Ensure tabPositions has entries for all pitches
+        val fixedTps = if (tps.size < p.size) {
+            p.mapIndexed { i, pitch ->
+                tps.getOrNull(i) ?: (if (!isRest) GuitarUtils.fromMidi(pitch) ?: Pair(0, 0) else Pair(0, 0))
             }
         } else {
-            csf
+            tps
         }
 
         return copy(
-            chordPitches = cp,
-            chordStringFrets = fixedCsf,
-            guitarString = derivedString,
-            guitarFret = derivedFret
+            pitches = p,
+            tabPositions = fixedTps
         )
     }
 
@@ -89,3 +67,104 @@ data class MusicalNote(
             notes.map { it.sanitized() }
     }
 }
+
+class MusicalNoteAdapter : JsonDeserializer<MusicalNote>, JsonSerializer<MusicalNote> {
+    override fun deserialize(json: JsonElement, typeOfT: Type, context: JsonDeserializationContext): MusicalNote {
+        val obj = json.asJsonObject
+        
+        val pitches = mutableListOf<Int>()
+        if (obj.has("midiPitch")) {
+            pitches.add(obj.get("midiPitch").asInt)
+        }
+        if (obj.has("chordPitches") && obj.get("chordPitches").isJsonArray) {
+            obj.get("chordPitches").asJsonArray.forEach { pitches.add(it.asInt) }
+        }
+        if (obj.has("pitches") && obj.get("pitches").isJsonArray) {
+            obj.get("pitches").asJsonArray.forEach { pitches.add(it.asInt) }
+        }
+
+        val tabPositions = mutableListOf<Pair<Int, Int>>()
+        if (obj.has("guitarString") && !obj.get("guitarString").isJsonNull && obj.has("guitarFret") && !obj.get("guitarFret").isJsonNull) {
+            val string = obj.get("guitarString").asInt
+            val fret = obj.get("guitarFret").asInt
+            if (string != 0 || fret != 0) {
+                 tabPositions.add(Pair(string, fret))
+            }
+        }
+        if (obj.has("chordStringFrets") && obj.get("chordStringFrets").isJsonArray) {
+            val csfArray = obj.get("chordStringFrets").asJsonArray
+            csfArray.forEach {
+                try {
+                    val pairObj = it.asJsonObject
+                    if (pairObj.has("first") && pairObj.has("second")) {
+                        tabPositions.add(Pair(pairObj.get("first").asInt, pairObj.get("second").asInt))
+                    }
+                } catch (e: Exception) {}
+            }
+        }
+        if (obj.has("tabPositions") && obj.get("tabPositions").isJsonArray) {
+            val tpArray = obj.get("tabPositions").asJsonArray
+            tpArray.forEach { 
+                val pairObj = it.asJsonObject
+                if (pairObj.has("first") && pairObj.has("second")) {
+                    tabPositions.add(Pair(pairObj.get("first").asInt, pairObj.get("second").asInt))
+                }
+            }
+        }
+
+        val durationTicks = if (obj.has("durationTicks")) obj.get("durationTicks").asInt else 1
+        val type = if (obj.has("type") && !obj.get("type").isJsonNull) obj.get("type").asString else "quarter"
+        val dotted = if (obj.has("dotted")) obj.get("dotted").asBoolean else false
+        val isRest = if (obj.has("isRest")) obj.get("isRest").asBoolean else false
+        val tiedToNext = if (obj.has("tiedToNext")) obj.get("tiedToNext").asBoolean else false
+        val velocity = if (obj.has("velocity")) obj.get("velocity").asInt else 80
+        val chordName = if (obj.has("chordName") && !obj.get("chordName").isJsonNull) obj.get("chordName").asString else null
+        val isManual = if (obj.has("isManual")) obj.get("isManual").asBoolean else false
+        val timePositionMs = if (obj.has("timePositionMs") && !obj.get("timePositionMs").isJsonNull) obj.get("timePositionMs").asFloat else null
+
+        return MusicalNote(
+            pitches = pitches.distinct(),
+            durationTicks = durationTicks,
+            type = type,
+            dotted = dotted,
+            isRest = isRest,
+            tiedToNext = tiedToNext,
+            velocity = velocity,
+            tabPositions = tabPositions.distinct(),
+            chordName = chordName,
+            isManual = isManual,
+            timePositionMs = timePositionMs
+        )
+    }
+
+    override fun serialize(src: MusicalNote, typeOfSrc: Type, context: JsonSerializationContext): JsonElement {
+        val obj = JsonObject()
+        
+        val pitchesArray = JsonArray()
+        src.pitches.forEach { pitchesArray.add(it) }
+        obj.add("pitches", pitchesArray)
+
+        obj.addProperty("durationTicks", src.durationTicks)
+        obj.addProperty("type", src.type)
+        obj.addProperty("dotted", src.dotted)
+        obj.addProperty("isRest", src.isRest)
+        obj.addProperty("tiedToNext", src.tiedToNext)
+        obj.addProperty("velocity", src.velocity)
+
+        val tpArray = JsonArray()
+        src.tabPositions.forEach {
+            val p = JsonObject()
+            p.addProperty("first", it.first)
+            p.addProperty("second", it.second)
+            tpArray.add(p)
+        }
+        obj.add("tabPositions", tpArray)
+
+        if (src.chordName != null) obj.addProperty("chordName", src.chordName)
+        obj.addProperty("isManual", src.isManual)
+        if (src.timePositionMs != null) obj.addProperty("timePositionMs", src.timePositionMs)
+
+        return obj
+    }
+}
+

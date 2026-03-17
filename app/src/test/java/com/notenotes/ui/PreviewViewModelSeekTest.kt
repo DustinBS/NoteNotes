@@ -237,7 +237,7 @@ class PreviewViewModelSeekTest {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private fun quarterNote(midi: Int) = MusicalNote(
-        midiPitch = midi,
+        pitches = listOf(midi),
         durationTicks = 4,
         type = "quarter"
     )

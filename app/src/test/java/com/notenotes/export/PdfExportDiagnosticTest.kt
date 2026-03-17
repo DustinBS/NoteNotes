@@ -50,10 +50,9 @@ class PdfExportDiagnosticTest {
     @Test
     fun generateMusicXml_withChords_validStructure() {
         val chord = MusicalNote(
-            midiPitch = 60,
+            pitches = listOf(60, 64, 67),
             durationTicks = 4,
             type = "quarter",
-            chordPitches = listOf(64, 67),
             chordName = "C Major"
         )
         val result = makeResult(listOf(chord, quarterNote(62), quarterNote(64), quarterNote(65)))
@@ -64,11 +63,10 @@ class PdfExportDiagnosticTest {
     @Test
     fun generateMusicXml_withGuitarTab_hasTuning() {
         val note = MusicalNote(
-            midiPitch = 64,
+            pitches = listOf(64),
             durationTicks = 4,
             type = "quarter",
-            guitarString = 1,
-            guitarFret = 0
+            tabPositions = listOf(Pair(1, 0))
         )
         val result = makeResult(listOf(note))
         val xml = generator.generateMusicXml(result)
@@ -297,7 +295,7 @@ class PdfExportDiagnosticTest {
     // ══════════════════════════════════════════════════════════════════════
 
     private fun quarterNote(midi: Int) = MusicalNote(
-        midiPitch = midi,
+        pitches = listOf(midi),
         durationTicks = 4,
         type = "quarter"
     )

@@ -24,13 +24,10 @@ class StatsComputationTest {
         // Chord note has explicit tab info on string index 5 fret 0.
         val notes = listOf(
             MusicalNote(
-                midiPitch = 59,
+                pitches = listOf(59, 64),
                 durationTicks = 4,
                 type = "quarter",
-                chordPitches = listOf(64),
-                chordStringFrets = listOf(Pair(5, 0)),
-                guitarString = null,
-                guitarFret = null,
+                tabPositions = listOf(Pair(5, 0)),
                 isManual = true,
                 timePositionMs = 1000f
             )
@@ -59,14 +56,14 @@ class StatsComputationTest {
             groupId = "g1",
             groupName = "Group 1",
             tempo = 100,
-            notes = listOf(MusicalNote(60, 4, "quarter", guitarString = 3, guitarFret = 2, isManual = true, timePositionMs = 0f))
+            notes = listOf(MusicalNote(listOf(60), 4, "quarter", tabPositions = listOf(Pair(3, 2)), isManual = true, timePositionMs = 0f))
         )
         val ideaB = idea(
             id = 2,
             groupId = "g2",
             groupName = "Group 2",
             tempo = 140,
-            notes = listOf(MusicalNote(64, 4, "quarter", guitarString = 5, guitarFret = 0, isManual = true, timePositionMs = 0f))
+            notes = listOf(MusicalNote(listOf(64), 4, "quarter", tabPositions = listOf(Pair(5, 0)), isManual = true, timePositionMs = 0f))
         )
 
         val allStats = computeStatsForIdeas(listOf(ideaA, ideaB))
@@ -83,8 +80,8 @@ class StatsComputationTest {
     @Test
     fun computeStatsForIdeas_funFactsArePopulated() {
         val notes = listOf(
-            MusicalNote(57, 4, "quarter", guitarString = 3, guitarFret = 2, isManual = true, timePositionMs = 0f),
-            MusicalNote(59, 4, "quarter", chordPitches = listOf(62), chordStringFrets = listOf(Pair(4, 3)), guitarString = 4, guitarFret = 0, isManual = true, timePositionMs = 1000f)
+            MusicalNote(listOf(57), 4, "quarter", tabPositions = listOf(Pair(3, 2)), isManual = true, timePositionMs = 0f),
+            MusicalNote(listOf(59, 62), 4, "quarter", tabPositions = listOf(Pair(4, 3), Pair(4, 0)), isManual = true, timePositionMs = 1000f)
         )
         val stats = computeStatsForIdeas(
             listOf(

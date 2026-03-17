@@ -394,11 +394,11 @@ private fun durationSeconds(note: MusicalNote, tempoBpm: Int): Float {
 }
 
 private fun buildPitchEntries(note: MusicalNote): List<Triple<Int, Int, Int>> {
-    val entries = mutableListOf(Triple(note.midiPitch, note.guitarString ?: 0, note.guitarFret ?: 0))
-    val safeChordSF = note.safeChordStringFrets
-    for (i in note.chordPitches.indices) {
-        val sf = if (i < safeChordSF.size) safeChordSF[i] else Pair(0, 0)
-        entries.add(Triple(note.chordPitches[i], sf.first, sf.second))
+    val entries = mutableListOf<Triple<Int, Int, Int>>()
+    for (i in note.pitches.indices) {
+        val pitch = note.pitches[i]
+        val sf = note.tabPositions.getOrNull(i) ?: Pair(0, 0)
+        entries.add(Triple(pitch, sf.first, sf.second))
     }
     return entries.sortedBy { it.first }
 }
@@ -453,20 +453,22 @@ private fun NoteEditDialog(
     onUpdateChordPitches: ((Int, List<Int>, List<Pair<Int, Int>>) -> Unit)? = null
 ) {
     // --- Mutable editing state for primary note ---
-    var editedPrimaryString by remember { mutableIntStateOf(note.guitarString ?: 0) }
-    var editedPrimaryFret by remember { mutableIntStateOf(note.guitarFret ?: 0) }
+    var editedPrimaryString by remember { mutableIntStateOf(note.tabPositions.firstOrNull()?.first ?: 0) }
+    var editedPrimaryFret by remember { mutableIntStateOf(note.tabPositions.firstOrNull()?.second ?: 0) }
 
     // String/fret selector state (what the selectors show)
-    var selectedStringIndex by remember { mutableIntStateOf(note.guitarString ?: 0) }
-    var selectedFret by remember { mutableIntStateOf(note.guitarFret ?: 0) }
+    var selectedStringIndex by remember { mutableIntStateOf(note.tabPositions.firstOrNull()?.first ?: 0) }
+    var selectedFret by remember { mutableIntStateOf(note.tabPositions.firstOrNull()?.second ?: 0) }
 
     // Mutable list of chord pitches for editing
-    val editableChordPitches = remember { mutableStateListOf<Int>().also { it.addAll(note.chordPitches) } }
+    val editableChordPitches = remember { mutableStateListOf<Int>().also { it.addAll(note.pitches.drop(1)) } }
     // Parallel list of chord string/fret positions
     val editableChordPositions = remember {
         mutableStateListOf<Pair<Int, Int>>().also { list ->
-            note.chordPitches.forEachIndexed { i, pitch ->
-                val stored = note.chordStringFrets.getOrNull(i)
+            val pitches = note.pitches.drop(1)
+            val tabPos = note.tabPositions.drop(1)
+            pitches.forEachIndexed { i, pitch ->
+                val stored = tabPos.getOrNull(i)
                 if (stored != null) {
                     list.add(stored)
                 } else {
@@ -480,12 +482,14 @@ private fun NoteEditDialog(
     var editingChordPitchIndex by remember { mutableStateOf<Int?>(null) }
 
     // --- Original values for change detection ---
-    val originalPrimaryString = note.guitarString ?: 0
-    val originalPrimaryFret = note.guitarFret ?: 0
-    val originalChordPitches = remember { note.chordPitches.toList() }
+    val originalPrimaryString = note.tabPositions.firstOrNull()?.first ?: 0
+    val originalPrimaryFret = note.tabPositions.firstOrNull()?.second ?: 0
+    val originalChordPitches = remember { note.pitches.drop(1).toList() }
     val originalChordPositions = remember {
-        note.chordPitches.mapIndexed { i, pitch ->
-            note.chordStringFrets.getOrNull(i) ?: (GuitarUtils.fromMidi(pitch) ?: Pair(0, 0))
+        val pitches = note.pitches.drop(1)
+        val tabPos = note.tabPositions.drop(1)
+        pitches.mapIndexed { i, pitch ->
+            tabPos.getOrNull(i) ?: (GuitarUtils.fromMidi(pitch) ?: Pair(0, 0))
         }
     }
 
@@ -621,7 +625,7 @@ private fun NoteEditDialog(
 
                         val originalChordIndex = originalChordPositions.indexOfFirst { it.first == index }
                         val originalEntry = when {
-                            index == originalPrimaryString -> Triple(note.midiPitch, originalPrimaryString, originalPrimaryFret)
+                              index == originalPrimaryString -> Triple(note.pitches.firstOrNull() ?: 0, originalPrimaryString, originalPrimaryFret)
                             originalChordIndex >= 0 -> {
                                 val sf = originalChordPositions[originalChordIndex]
                                 val pitch = originalChordPitches.getOrElse(originalChordIndex) { GuitarUtils.toMidi(sf.first, sf.second) }

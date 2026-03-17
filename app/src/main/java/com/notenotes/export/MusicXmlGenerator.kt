@@ -131,7 +131,7 @@ class MusicXmlGenerator {
                 val gapTicks = Math.round(firstTimeMs / tickMs).toInt()
                 if (gapTicks > 0) {
                     notes.add(0, MusicalNote(
-                        midiPitch = 0,
+                        pitches = emptyList(),
                         durationTicks = gapTicks,
                         type = ticksToType(gapTicks, divisions),
                         dotted = false,
@@ -162,20 +162,11 @@ class MusicXmlGenerator {
                         // Standard duration — emit directly
                         val std = stds.first { it.ticks == note.durationTicks }
                         val fixedNote = note.copy(type = std.typeName, dotted = std.dotted)
-                        appendNote(sb, fixedNote, divisions, result.keySignature.fifths,
+                        appendNote(sb, fixedNote, 0, divisions, result.keySignature.fifths,
                             tieStart = false, tieStop = pendingTieStop, isChordNote = false)
                         if (note.isChord) {
-                            for ((i, chordPitch) in note.chordPitches.withIndex()) {
-                                val pos = note.chordStringFrets.getOrNull(i)
-                                val chordNote = fixedNote.copy(
-                                    midiPitch = chordPitch,
-                                    guitarString = pos?.first,
-                                    guitarFret = pos?.second,
-                                    chordPitches = emptyList(),
-                                    chordStringFrets = emptyList(),
-                                    chordName = null
-                                )
-                                appendNote(sb, chordNote, divisions, result.keySignature.fifths,
+                            for (i in 1 until note.pitches.size) {
+                                appendNote(sb, fixedNote, i, divisions, result.keySignature.fifths,
                                     tieStart = false, tieStop = pendingTieStop, isChordNote = true)
                             }
                         }
@@ -194,21 +185,12 @@ class MusicXmlGenerator {
                                 dotted = sd.dotted,
                                 tiedToNext = partTieStart
                             )
-                            appendNote(sb, partNote, divisions, result.keySignature.fifths,
+                            appendNote(sb, partNote, 0, divisions, result.keySignature.fifths,
                                 tieStart = partTieStart, tieStop = partTieStop,
                                 isChordNote = false)
                             if (note.isChord) {
-                                for ((i, chordPitch) in note.chordPitches.withIndex()) {
-                                    val pos = note.chordStringFrets.getOrNull(i)
-                                    val chordNote = partNote.copy(
-                                        midiPitch = chordPitch,
-                                        guitarString = pos?.first,
-                                        guitarFret = pos?.second,
-                                        chordPitches = emptyList(),
-                                        chordStringFrets = emptyList(),
-                                        chordName = null
-                                    )
-                                    appendNote(sb, chordNote, divisions, result.keySignature.fifths,
+                                for (i in 1 until note.pitches.size) {
+                                    appendNote(sb, partNote, i, divisions, result.keySignature.fifths,
                                         tieStart = partTieStart, tieStop = partTieStop,
                                         isChordNote = true)
                                 }
@@ -237,20 +219,11 @@ class MusicXmlGenerator {
                                 dotted = sd.dotted,
                                 tiedToNext = true
                             )
-                            appendNote(sb, firstPart, divisions, result.keySignature.fifths,
+                            appendNote(sb, firstPart, 0, divisions, result.keySignature.fifths,
                                 tieStart = true, tieStop = partTieStop, isChordNote = false)
                             if (note.isChord) {
-                                for ((i, chordPitch) in note.chordPitches.withIndex()) {
-                                    val pos = note.chordStringFrets.getOrNull(i)
-                                    val chordNote = firstPart.copy(
-                                        midiPitch = chordPitch,
-                                        guitarString = pos?.first,
-                                        guitarFret = pos?.second,
-                                        chordPitches = emptyList(),
-                                        chordStringFrets = emptyList(),
-                                        chordName = null
-                                    )
-                                    appendNote(sb, chordNote, divisions, result.keySignature.fifths,
+                                for (i in 1 until note.pitches.size) {
+                                    appendNote(sb, firstPart, i, divisions, result.keySignature.fifths,
                                         tieStart = true, tieStop = partTieStop, isChordNote = true)
                                 }
                             }
@@ -272,7 +245,7 @@ class MusicXmlGenerator {
                                 type = sd.typeName,
                                 dotted = sd.dotted
                             )
-                            appendNote(sb, restPart, divisions, result.keySignature.fifths,
+                            appendNote(sb, restPart, 0, divisions, result.keySignature.fifths,
                                 tieStart = false, tieStop = false, isChordNote = false)
                         }
                         
@@ -293,13 +266,13 @@ class MusicXmlGenerator {
                 val restParts = decomposeToStandard(restTicks, stds)
                 for (sd in restParts) {
                     val restNote = MusicalNote(
-                        midiPitch = 0,
+                        pitches = emptyList(),
                         durationTicks = sd.ticks,
                         type = sd.typeName,
                         dotted = sd.dotted,
                         isRest = true
                     )
-                    appendNote(sb, restNote, divisions, result.keySignature.fifths,
+                    appendNote(sb, restNote, 0, divisions, result.keySignature.fifths,
                         tieStart = false, tieStop = false, isChordNote = false)
                 }
                 ticksInCurrentMeasure = ticksPerMeasure
@@ -395,6 +368,7 @@ class MusicXmlGenerator {
     private fun appendNote(
         sb: StringBuilder,
         note: MusicalNote,
+        pitchIndex: Int,
         divisions: Int,
         keyFifths: Int,
         tieStart: Boolean = false,
@@ -408,10 +382,12 @@ class MusicXmlGenerator {
             sb.appendLine("""        <chord/>""")
         }
         
+        val pitch = note.pitches.getOrElse(pitchIndex) { 0 }
+        
         if (note.isRest) {
             sb.appendLine("""        <rest/>""")
         } else {
-            val (step, alter, octave) = PitchUtils.midiToMusicXmlPitch(note.midiPitch, keyFifths)
+            val (step, alter, octave) = PitchUtils.midiToMusicXmlPitch(pitch, keyFifths)
             sb.appendLine("""        <pitch>""")
             sb.appendLine("""          <step>$step</step>""")
             if (alter != 0) {
@@ -441,9 +417,11 @@ class MusicXmlGenerator {
         }
         
         // Notations for ties and guitar tablature
+        val tabPos = note.tabPositions.getOrNull(pitchIndex)
+        val hasTabSingle = tabPos != null && !note.isRest
         val hasTie = tieStart || tieStop || note.tiedToNext
-        val hasTab = note.hasTab && !note.isRest
-        if (hasTie || hasTab) {
+
+        if (hasTie || hasTabSingle) {
             sb.appendLine("""        <notations>""")
             if (tieStart || note.tiedToNext) {
                 sb.appendLine("""          <tied type="start"/>""")
@@ -452,12 +430,12 @@ class MusicXmlGenerator {
                 sb.appendLine("""          <tied type="stop"/>""")
             }
             // Guitar tablature: <string> and <fret> in <technical>
-            if (hasTab) {
+            if (hasTabSingle) {
                 sb.appendLine("""          <technical>""")
                 // guitarString is 0-based (0=Low E), MusicXML <string> is 1=High E, 6=Low E
-                val stringNum = 6 - (note.guitarString ?: 0)
+                val stringNum = 6 - tabPos!!.first
                 sb.appendLine("""            <string>$stringNum</string>""")
-                sb.appendLine("""            <fret>${note.guitarFret ?: 0}</fret>""")
+                sb.appendLine("""            <fret>${tabPos.second}</fret>""")
                 sb.appendLine("""          </technical>""")
             }
             sb.appendLine("""        </notations>""")

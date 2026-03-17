@@ -84,8 +84,8 @@ class RealAudioDiagnosticTest {
         val pipeline = TranscriptionPipeline()
         val result = pipeline.process(samples)
         return PipelineOutput(
-            noteNames = result.notes.map { PitchUtils.midiToNoteName(it.midiPitch) },
-            midiNotes = result.notes.map { it.midiPitch },
+            noteNames = result.notes.map { PitchUtils.midiToNoteName(it.pitches.first()) },
+            midiNotes = result.notes.map { it.pitches.first() },
             noteCount = result.notes.size,
             chordNames = result.notes.map { it.chordName }
         )
@@ -296,7 +296,7 @@ class RealAudioDiagnosticTest {
         val countByThreshold = thresholds.map { threshold ->
             val pipeline = TranscriptionPipeline(minNoteConfidence = threshold)
             val result = pipeline.process(samples)
-            val notes = result.notes.map { PitchUtils.midiToNoteName(it.midiPitch) }
+            val notes = result.notes.map { PitchUtils.midiToNoteName(it.pitches.first()) }
             println("  threshold=$threshold → ${result.notes.size} notes: $notes")
             threshold to result.notes.size
         }

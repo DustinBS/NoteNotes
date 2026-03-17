@@ -34,8 +34,7 @@ object TranspositionUtils {
         return notes.map { note ->
             if (note.isRest) note
             else note.copy(
-                midiPitch = transposeForInstrument(note.midiPitch, instrument),
-                chordPitches = note.chordPitches.map { transposeForInstrument(it, instrument) }
+                pitches = note.pitches.map { transposeForInstrument(it, instrument) }
             )
         }
     }

@@ -36,7 +36,7 @@ class EndToEndIntegrationTest {
         dotted: Boolean = false,
         tiedToNext: Boolean = false,
         velocity: Int = 80
-    ) = MusicalNote(midi, ticks, type, dotted, isRest, tiedToNext, velocity)
+    ) = MusicalNote(listOf(midi), ticks, type, dotted, isRest, tiedToNext, velocity)
 
     private fun rest(ticks: Int = 4, type: String = "quarter") =
         note(0, ticks, type, isRest = true)

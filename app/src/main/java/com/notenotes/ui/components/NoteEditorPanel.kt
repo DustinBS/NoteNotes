@@ -67,25 +67,25 @@ fun NoteEditorPanel(
     onPendingChangesChanged: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var selectedStringIndex by remember { mutableIntStateOf(selectedNote?.guitarString ?: 0) }
-    var selectedFret by remember { mutableIntStateOf(selectedNote?.guitarFret ?: 0) }
+    var selectedStringIndex by remember { mutableIntStateOf(selectedNote?.tabPositions?.firstOrNull()?.first ?: 0) }
+    var selectedFret by remember { mutableIntStateOf(selectedNote?.tabPositions?.firstOrNull()?.second ?: 0) }
     var showCopyFromMenu by remember(selectedNoteIndex) { mutableStateOf(false) }
     var showDeleteWholeChordConfirm by remember { mutableStateOf(false) }
 
     // Which chord note is being edited: 0 = primary, 1..n = chord pitch index
     // Tracked by (stringIndex, fret) identity — unique per guitar string, avoids MIDI pitch collisions
     var editingChordNoteIndex by remember { mutableIntStateOf(0) }
-    var editingTargetStringFret by remember { mutableStateOf(Pair(selectedNote?.guitarString ?: 0, selectedNote?.guitarFret ?: 0)) }
+    var editingTargetStringFret by remember { mutableStateOf(selectedNote?.tabPositions?.firstOrNull() ?: Pair(0, 0)) }
 
-    var draftPrimaryMidi by remember { mutableIntStateOf(selectedNote?.midiPitch ?: 0) }
-    var draftPrimaryString by remember { mutableIntStateOf(selectedNote?.guitarString ?: 0) }
-    var draftPrimaryFret by remember { mutableIntStateOf(selectedNote?.guitarFret ?: 0) }
+    var draftPrimaryMidi by remember { mutableIntStateOf(selectedNote?.pitches?.firstOrNull() ?: 0) }
+    var draftPrimaryString by remember { mutableIntStateOf(selectedNote?.tabPositions?.firstOrNull()?.first ?: 0) }
+    var draftPrimaryFret by remember { mutableIntStateOf(selectedNote?.tabPositions?.firstOrNull()?.second ?: 0) }
     val draftChordPitches = remember { mutableStateListOf<Int>() }
     val draftChordStringFrets = remember { mutableStateListOf<Pair<Int, Int>>() }
 
-    var originalPrimaryMidi by remember { mutableIntStateOf(selectedNote?.midiPitch ?: 0) }
-    var originalPrimaryString by remember { mutableIntStateOf(selectedNote?.guitarString ?: 0) }
-    var originalPrimaryFret by remember { mutableIntStateOf(selectedNote?.guitarFret ?: 0) }
+    var originalPrimaryMidi by remember { mutableIntStateOf(selectedNote?.pitches?.firstOrNull() ?: 0) }
+    var originalPrimaryString by remember { mutableIntStateOf(selectedNote?.tabPositions?.firstOrNull()?.first ?: 0) }
+    var originalPrimaryFret by remember { mutableIntStateOf(selectedNote?.tabPositions?.firstOrNull()?.second ?: 0) }
     val originalChordPitches = remember { mutableStateListOf<Int>() }
     val originalChordStringFrets = remember { mutableStateListOf<Pair<Int, Int>>() }
 
@@ -106,11 +106,8 @@ fun NoteEditorPanel(
 
     LaunchedEffect(
         selectedNoteIndex,
-        selectedNote?.midiPitch,
-        selectedNote?.guitarString,
-        selectedNote?.guitarFret,
-        selectedNote?.chordPitches,
-        selectedNote?.chordStringFrets
+        selectedNote?.pitches,
+        selectedNote?.tabPositions
     ) {
         val note = selectedNote
         if (selectedNoteIndex == null || note == null) {
@@ -121,23 +118,24 @@ fun NoteEditorPanel(
             return@LaunchedEffect
         }
 
-        val primaryString = note.guitarString ?: 0
-        val primaryFret = note.guitarFret ?: 0
-        val safeChordSF = note.safeChordStringFrets
+        val primaryString = note.tabPositions.firstOrNull()?.first ?: 0
+        val primaryFret = note.tabPositions.firstOrNull()?.second ?: 0
 
-        draftPrimaryMidi = note.midiPitch
+        draftPrimaryMidi = note.pitches.firstOrNull() ?: 0
         draftPrimaryString = primaryString
         draftPrimaryFret = primaryFret
         draftChordPitches.clear()
-        draftChordPitches.addAll(note.chordPitches)
+        val restPitches = if (note.pitches.size > 1) note.pitches.drop(1) else emptyList()
+        val restPositions = if (note.tabPositions.size > 1) note.tabPositions.drop(1) else emptyList()
+        draftChordPitches.addAll(restPitches)
         draftChordStringFrets.clear()
         draftChordStringFrets.addAll(
-            note.chordPitches.indices.map { idx ->
-                if (idx < safeChordSF.size) safeChordSF[idx] else Pair(0, 0)
+            restPitches.indices.map { idx ->
+                restPositions.getOrNull(idx) ?: Pair(0, 0)
             }
         )
 
-        originalPrimaryMidi = note.midiPitch
+        originalPrimaryMidi = draftPrimaryMidi
         originalPrimaryString = primaryString
         originalPrimaryFret = primaryFret
         originalChordPitches.clear()
@@ -149,25 +147,6 @@ fun NoteEditorPanel(
         selectedFret = primaryFret
         editingChordNoteIndex = 0
         editingTargetStringFret = Pair(primaryString, primaryFret)
-    }
-
-    // Update local draft only. Changes are committed by explicit confirm action.
-    LaunchedEffect(selectedStringIndex, selectedFret, editingChordNoteIndex, selectedNoteIndex, hasSelectedNote) {
-        if (!hasSelectedNote || selectedNoteIndex == null) return@LaunchedEffect
-        val newMidi = GuitarUtils.toMidi(selectedStringIndex, selectedFret)
-        if (editingChordNoteIndex == 0) {
-            draftPrimaryMidi = newMidi
-            draftPrimaryString = selectedStringIndex
-            draftPrimaryFret = selectedFret
-            editingTargetStringFret = Pair(selectedStringIndex, selectedFret)
-        } else {
-            val chordIdx = editingChordNoteIndex - 1
-            if (chordIdx in draftChordPitches.indices) {
-                draftChordPitches[chordIdx] = newMidi
-                draftChordStringFrets[chordIdx] = Pair(selectedStringIndex, selectedFret)
-                editingTargetStringFret = Pair(selectedStringIndex, selectedFret)
-            }
-        }
     }
 
     val currentMidi = GuitarUtils.toMidi(selectedStringIndex, selectedFret)
@@ -659,9 +638,9 @@ fun NoteEditorPanel(
                                 allNotes.forEachIndexed { idx, note ->
                                     if (selectedNoteIndex != null && idx == selectedNoteIndex) return@forEachIndexed
                                     val noteLabel = if (note.isChord) {
-                                        note.allPitches.joinToString(" ") { pitch -> PitchUtils.midiToNoteName(pitch) }
+                                        note.pitches.joinToString(" ") { pitch -> PitchUtils.midiToNoteName(pitch) }
                                     } else {
-                                        PitchUtils.midiToNoteName(note.midiPitch)
+                                        PitchUtils.midiToNoteName(note.pitches.firstOrNull() ?: 0)
                                     }
                                     DropdownMenuItem(
                                         text = { Text("#${idx + 1} $noteLabel") },

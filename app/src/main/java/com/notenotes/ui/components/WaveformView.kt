@@ -86,7 +86,7 @@ data class NoteOverlayItem(
     val label: String,          // e.g., "C4", "Am"
     val startFraction: Float,   // 0.0–1.0 position along GLOBAL timeline
     val endFraction: Float,
-    val midiPitch: Int,
+    val pitches: List<Int>,
     val noteIndex: Int,
     val hasTab: Boolean = false,
     val tabLabel: String? = null // e.g., "S1 F3" for string 1, fret 3
@@ -514,18 +514,19 @@ private fun computeNoteOverlays(
         val label = if (note.isChord) {
             note.allPitches.joinToString(" ") { pitch -> PitchUtils.midiToNoteName(pitch) }
         } else {
-            PitchUtils.midiToNoteName(note.midiPitch)
+            val primaryPitch = note.pitches.firstOrNull() ?: 0
+            PitchUtils.midiToNoteName(primaryPitch)
         }
 
         val tabLabel = if (note.hasTab) {
-            "S${(note.guitarString ?: 0) + 1} F${note.guitarFret ?: 0}"
+            note.tabPositions.joinToString(", ") { "S${it.first + 1} F${it.second}" }
         } else null
 
         overlays.add(NoteOverlayItem(
             label = label,
             startFraction = startFraction,
             endFraction = endFraction,
-            midiPitch = note.midiPitch,
+            pitches = note.pitches,
             noteIndex = noteIndex,
             hasTab = note.hasTab,
             tabLabel = tabLabel

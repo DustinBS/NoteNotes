@@ -19,7 +19,7 @@ class MidiWriterTest {
         isRest: Boolean = false
     ): MusicalNote {
         return MusicalNote(
-            midiPitch = midi,
+            pitches = listOf(midi),
             durationTicks = ticks,
             type = type,
             dotted = false,

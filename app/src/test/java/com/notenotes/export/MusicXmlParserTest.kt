@@ -84,7 +84,7 @@ class MusicXmlParserTest {
     fun parse_mergesTiedNotes_correctPitches() {
         val result = parser.parse(starshipXml)
         val expectedPitches = listOf(45, 45, 52, 64, 45, 52, 76, 74, 71, 45, 64)
-        val actualPitches = result.notes.map { it.midiPitch }
+        val actualPitches = result.notes.map { it.pitches.first() }
         assertEquals("MIDI pitches should match original", expectedPitches, actualPitches)
     }
 
@@ -105,8 +105,8 @@ class MusicXmlParserTest {
         val result = parser.parse(starshipXml)
         val note1 = result.notes[0]
         // Original: A2 chord with E3(52), A3(57), C4(60)
-        assertEquals("Note 1 should have 3 chord pitches", 3, note1.chordPitches.size)
-        assertEquals(listOf(52, 57, 60), note1.chordPitches)
+        assertEquals("Note 1 should have 4 chord pitches", 4, note1.pitches.size)
+        assertEquals(listOf(45, 52, 57, 60), note1.pitches)
     }
 
     @Test
@@ -114,8 +114,8 @@ class MusicXmlParserTest {
         val result = parser.parse(starshipXml)
         val note3 = result.notes[2]
         // Original: E3 chord with B3(59), E4(64), G4(67)
-        assertEquals("Note 3 should have 3 chord pitches", 3, note3.chordPitches.size)
-        assertEquals(listOf(59, 64, 67), note3.chordPitches)
+        assertEquals("Note 3 should have 4 chord pitches", 4, note3.pitches.size)
+        assertEquals(listOf(52, 59, 64, 67), note3.pitches)
     }
 
     @Test
@@ -125,10 +125,11 @@ class MusicXmlParserTest {
         // String/fret for chord members (0-based strings in our model)
         // XML has string=4/fret=2, string=3/fret=2, string=2/fret=1
         // After 6-x conversion: (2,2), (3,2), (4,1)
-        assertEquals(3, note1.chordStringFrets.size)
-        assertEquals(Pair(2, 2), note1.chordStringFrets[0])
-        assertEquals(Pair(3, 2), note1.chordStringFrets[1])
-        assertEquals(Pair(4, 1), note1.chordStringFrets[2])
+        assertEquals(4, note1.tabPositions.size)
+        assertEquals(Pair(1, 0), note1.tabPositions[0])
+        assertEquals(Pair(2, 2), note1.tabPositions[1])
+        assertEquals(Pair(3, 2), note1.tabPositions[2])
+        assertEquals(Pair(4, 1), note1.tabPositions[3])
     }
 
     @Test
@@ -138,8 +139,8 @@ class MusicXmlParserTest {
         val singleNoteIndices = listOf(1, 3, 6, 7, 8, 10)
         for (idx in singleNoteIndices) {
             assertTrue(
-                "Note ${idx + 1} should have no chord pitches, had ${result.notes[idx].chordPitches}",
-                result.notes[idx].chordPitches.isEmpty()
+                "Note ${idx + 1} should have 1 pitch, had ${result.notes[idx].pitches}",
+                result.notes[idx].pitches.size == 1
             )
         }
     }
@@ -186,8 +187,8 @@ class MusicXmlParserTest {
 
         assertEquals(
             "Round-trip should preserve pitches",
-            parsed1.notes.map { it.midiPitch },
-            parsed2.notes.map { it.midiPitch }
+            parsed1.notes.map { it.pitches.first() },
+            parsed2.notes.map { it.pitches.first() }
         )
     }
 
@@ -215,8 +216,8 @@ class MusicXmlParserTest {
         for (i in parsed1.notes.indices) {
             assertEquals(
                 "Note $i chord pitches should match after round-trip",
-                parsed1.notes[i].chordPitches,
-                parsed2.notes[i].chordPitches
+                parsed1.notes[i].pitches,
+                parsed2.notes[i].pitches
             )
         }
     }
@@ -254,7 +255,7 @@ class MusicXmlParserTest {
         val result = parser.parse(xml)
         assertEquals("Should merge to 1 note", 1, result.notes.size)
         assertEquals("Duration should be 16 ticks", 16, result.notes[0].durationTicks)
-        assertEquals("Pitch should be C4 (60)", 60, result.notes[0].midiPitch)
+        assertEquals("Pitch should be C4 (60)", 60, result.notes[0].pitches.first())
         assertFalse("Should not be tied", result.notes[0].tiedToNext)
     }
 
@@ -339,8 +340,8 @@ class MusicXmlParserTest {
         val result = parser.parse(xml)
         assertEquals("Should be 1 merged note", 1, result.notes.size)
         assertEquals("Duration should be 16", 16, result.notes[0].durationTicks)
-        assertEquals("Primary pitch is A2=45", 45, result.notes[0].midiPitch)
-        assertEquals("Chord should have E3=52", listOf(52), result.notes[0].chordPitches)
+        assertEquals("Primary pitch is A2=45", 45, result.notes[0].pitches.first())
+        assertEquals("Chord should have E3=52", listOf(45, 52), result.notes[0].pitches)
     }
 
     @Test

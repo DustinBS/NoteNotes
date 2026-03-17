@@ -107,13 +107,16 @@ fun GuitarTabView(
             val timeSec = if (timeMs != null) timeMs / 1000f else cumulativeSec
 
             if (note.hasTab) {
-                val displayLine = 5 - (note.guitarString ?: 0) // convert to display order
-                result.add(TabNote(timeSec, note.guitarString, note.guitarFret,
-                    (note.guitarFret ?: 0).toString(), note.isManual, displayLine.coerceIn(0, 5)))
+                note.tabPositions.forEach { (guitarString, guitarFret) ->
+                    val displayLine = 5 - guitarString // convert to display order
+                    result.add(TabNote(timeSec, guitarString, guitarFret,
+                        guitarFret.toString(), note.isManual, displayLine.coerceIn(0, 5)))
+                }
             } else {
                 // No tab info — show note name on bottom area
+                val primaryPitch = note.pitches.firstOrNull() ?: 0
                 result.add(TabNote(timeSec, null, null,
-                    PitchUtils.midiToNoteName(note.midiPitch), note.isManual, 5))
+                    PitchUtils.midiToNoteName(primaryPitch), note.isManual, 5))
             }
 
             // Handle chord pitches (simplified: just show primary note's tab)
@@ -131,12 +134,13 @@ fun GuitarTabView(
                 .width(28.dp)
                 .padding(top = topMargin.dp - 8.dp)
         ) {
-            for (label in stringLabels) {
+            for (i in 0 until 6) {
+                val stringColor = Color(com.notenotes.util.GuitarUtils.STRINGS[5 - i].colorArgb)
                 Text(
-                    text = label,
+                    text = stringLabels[i],
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
-                    color = labelColor,
+                    color = stringColor,
                     modifier = Modifier
                         .height(lineSpacing.dp)
                         .padding(start = 4.dp)
@@ -157,8 +161,9 @@ fun GuitarTabView(
             // Draw 6 string lines
             for (i in 0 until 6) {
                 val y = topMargin + i * lineSpacing
+                val stringColor = Color(com.notenotes.util.GuitarUtils.STRINGS[5 - i].colorArgb)
                 drawLine(
-                    color = lineColor,
+                    color = stringColor.copy(alpha = if (forceLightMode) 1f else 0.4f),
                     start = Offset(0f, y),
                     end = Offset(canvasWidth, y),
                     strokeWidth = 1f
@@ -202,9 +207,14 @@ fun GuitarTabView(
                 )
 
                 // Draw fret number or note name
+                val stringColor = tabNote.guitarString?.let { Color(com.notenotes.util.GuitarUtils.STRINGS[it].colorArgb) } ?: fretTextColor
+                val dynamicFretStyle = if (tabNote.guitarString != null) {
+                    fretTextStyle.copy(color = stringColor)
+                } else noTabTextStyle
+
                 val measured = textMeasurer.measure(
                     tabNote.label,
-                    if (tabNote.guitarString != null) fretTextStyle else noTabTextStyle
+                    dynamicFretStyle
                 )
                 drawText(
                     measured,

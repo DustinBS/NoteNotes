@@ -180,16 +180,23 @@ class MusicXmlParser {
                     // First appearance of a chord member → merge into primary note
                     if (notes.isNotEmpty()) {
                         val primary = notes.last()
-                        val updatedChordPitches = primary.chordPitches.toMutableList()
-                        updatedChordPitches.add(midiPitch)
-                        val updatedChordStringFrets = primary.chordStringFrets.toMutableList()
-                        if (guitarString != null && guitarFret != null) {
-                            updatedChordStringFrets.add(Pair(guitarString, guitarFret))
+                        if (!primary.isRest) {
+                            val updatedPitches = primary.pitches.toMutableList()
+                            updatedPitches.add(midiPitch)
+                            val updatedTabPositions = primary.tabPositions.toMutableList()
+
+                            if (updatedTabPositions.isNotEmpty() || (guitarString != null && guitarFret != null)) {
+                                while (updatedTabPositions.size < updatedPitches.size - 1) {
+                                    updatedTabPositions.add(Pair(0, 0)) // Pad missing preceding tab info
+                                }
+                                updatedTabPositions.add(Pair(guitarString ?: 0, guitarFret ?: 0))
+                            }
+
+                            notes[notes.lastIndex] = primary.copy(
+                                pitches = updatedPitches,
+                                tabPositions = updatedTabPositions
+                            )
                         }
-                        notes[notes.lastIndex] = primary.copy(
-                            chordPitches = updatedChordPitches,
-                            chordStringFrets = updatedChordStringFrets
-                        )
                     }
                     continue
                 }
@@ -221,15 +228,15 @@ class MusicXmlParser {
                 }
 
                 // New note event
+                val tabPositions = if (guitarString != null && guitarFret != null) listOf(Pair(guitarString, guitarFret)) else emptyList()
                 val note = MusicalNote(
-                    midiPitch = midiPitch,
+                    pitches = if (isRest) emptyList() else listOf(midiPitch),
                     durationTicks = durationTicks,
                     type = noteType,
                     dotted = dotted,
                     isRest = isRest,
                     tiedToNext = false, // ties are internal to XML; merged notes are untied
-                    guitarString = guitarString,
-                    guitarFret = guitarFret,
+                    tabPositions = tabPositions,
                     timePositionMs = currentTimeMs.toFloat()
                 )
                 notes.add(note)
@@ -257,6 +264,17 @@ class MusicXmlParser {
         // survives without the rest elements.
         while (trimmedNotes.isNotEmpty() && trimmedNotes.first().isRest) {
             trimmedNotes.removeAt(0)
+        }
+
+        // Only the first note needs timePositionMs to preserve the offset.
+        // Clear it from the rest so they flow dynamically with edits instead
+        // of freezing their timings to this exact parse time.
+        if (trimmedNotes.isNotEmpty()) {
+            for (i in 1 until trimmedNotes.size) {
+                if (trimmedNotes[i].timePositionMs != null) {
+                    trimmedNotes[i] = trimmedNotes[i].copy(timePositionMs = null)
+                }
+            }
         }
 
         return ParseResult(

@@ -97,10 +97,9 @@ class PreviewViewModelPlaybackTest {
     @Test
     fun musicalNote_isChord_whenChordPitchesPresent() {
         val note = MusicalNote(
-            midiPitch = 60,
+            pitches = listOf(60, 64, 67),
             durationTicks = 4,
-            type = "quarter",
-            chordPitches = listOf(64, 67)
+            type = "quarter"
         )
         assertTrue(note.isChord)
     }
@@ -108,7 +107,7 @@ class PreviewViewModelPlaybackTest {
     @Test
     fun musicalNote_isNotChord_whenChordPitchesEmpty() {
         val note = MusicalNote(
-            midiPitch = 60,
+            pitches = listOf(60),
             durationTicks = 4,
             type = "quarter"
         )
@@ -118,10 +117,9 @@ class PreviewViewModelPlaybackTest {
     @Test
     fun musicalNote_allPitches_includesPrimaryAndChord() {
         val note = MusicalNote(
-            midiPitch = 60,
+            pitches = listOf(60, 64, 67),
             durationTicks = 4,
-            type = "quarter",
-            chordPitches = listOf(64, 67)
+            type = "quarter"
         )
         assertEquals(listOf(60, 64, 67), note.allPitches)
     }
@@ -129,7 +127,7 @@ class PreviewViewModelPlaybackTest {
     @Test
     fun musicalNote_allPitches_singleNotePrimary() {
         val note = MusicalNote(
-            midiPitch = 60,
+            pitches = listOf(60),
             durationTicks = 4,
             type = "quarter"
         )
@@ -139,11 +137,10 @@ class PreviewViewModelPlaybackTest {
     @Test
     fun musicalNote_hasTab_whenStringAndFretSet() {
         val note = MusicalNote(
-            midiPitch = 60,
+            pitches = listOf(60),
             durationTicks = 4,
             type = "quarter",
-            guitarString = 1,
-            guitarFret = 3
+            tabPositions = listOf(Pair(1, 3))
         )
         assertTrue(note.hasTab)
     }
@@ -151,7 +148,7 @@ class PreviewViewModelPlaybackTest {
     @Test
     fun musicalNote_hasTab_falseByDefault() {
         val note = MusicalNote(
-            midiPitch = 60,
+            pitches = listOf(60),
             durationTicks = 4,
             type = "quarter"
         )
@@ -162,29 +159,28 @@ class PreviewViewModelPlaybackTest {
     fun musicalNote_sanitized_fillsMissingTab() {
         // sanitized() should respect existing string/fret and not reset them
         val note = MusicalNote(
-            midiPitch = 60,
+            pitches = listOf(60),
             durationTicks = 4,
             type = "quarter",
-            guitarString = 2,
-            guitarFret = 5
+            tabPositions = listOf(Pair(2, 5))
         )
         val sanitized = note.sanitized()
-        assertEquals(2, sanitized.guitarString)
-        assertEquals(5, sanitized.guitarFret)
+        assertEquals(2, sanitized.tabPositions.first().first)
+        assertEquals(5, sanitized.tabPositions.first().second)
     }
 
     @Test
     fun musicalNote_sanitizeList_preservesOrder() {
         val notes = listOf(
-            MusicalNote(midiPitch = 60, durationTicks = 4, type = "quarter"),
-            MusicalNote(midiPitch = 64, durationTicks = 4, type = "quarter"),
-            MusicalNote(midiPitch = 67, durationTicks = 4, type = "quarter")
+            MusicalNote(pitches = listOf(60), durationTicks = 4, type = "quarter"),
+            MusicalNote(pitches = listOf(64), durationTicks = 4, type = "quarter"),
+            MusicalNote(pitches = listOf(67), durationTicks = 4, type = "quarter")
         )
         val sanitized = MusicalNote.sanitizeList(notes)
         assertEquals(3, sanitized.size)
-        assertEquals(60, sanitized[0].midiPitch)
-        assertEquals(64, sanitized[1].midiPitch)
-        assertEquals(67, sanitized[2].midiPitch)
+        assertEquals(60, sanitized[0].pitches.first())
+        assertEquals(64, sanitized[1].pitches.first())
+        assertEquals(67, sanitized[2].pitches.first())
     }
 
     // ── Default States ──────────────────────────────────────────────────────

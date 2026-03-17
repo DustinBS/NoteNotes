@@ -157,25 +157,17 @@ internal fun computeStatsForIdeas(ideas: List<MelodyIdea>): StatsUiState {
         for (note in parseIdeaNotes(idea.notes)) {
             if (note.isRest) continue
             val durationSec = note.durationTicks.coerceAtLeast(0) * tickDurationSec
-            val chordSize = 1 + note.chordPitches.size
+            val chordSize = note.pitches.size
             chordSizeCounts[chordSize] = (chordSizeCounts[chordSize] ?: 0) + 1
 
-            val primaryPos = if (note.guitarString != null && note.guitarFret != null) {
-                Pair(note.guitarString, note.guitarFret)
-            } else {
-                GuitarUtils.fromMidi(note.midiPitch)
-            }
+            val primaryPos = note.safeTabPositions.firstOrNull() ?: GuitarUtils.fromMidi(note.pitches.first())
             addStringUsage(primaryPos?.first, primaryPos?.second, durationSec)
 
             if (note.isChord) {
-                val safeChordSF = note.safeChordStringFrets
-                note.chordPitches.indices.forEach { chordIndex ->
-                    val pitch = note.chordPitches[chordIndex]
-                    val stringFret = if (chordIndex < safeChordSF.size) {
-                        safeChordSF[chordIndex]
-                    } else {
-                        GuitarUtils.fromMidi(pitch)
-                    }
+                note.pitches.indices.forEach { chordIndex ->
+                    if (chordIndex == 0) return@forEach // skip primary pitch
+                    val pitch = note.pitches[chordIndex]
+                    val stringFret = note.safeTabPositions.getOrNull(chordIndex) ?: GuitarUtils.fromMidi(pitch)
                     addStringUsage(stringFret?.first, stringFret?.second, durationSec)
                 }
             }

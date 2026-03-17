@@ -102,20 +102,26 @@ class MidiWriter {
             }
 
             val velocity = note.velocity.coerceIn(0, 127)
-            val pitch = note.midiPitch.coerceIn(0, 127)
+
+            if (note.pitches.isEmpty()) {
+                pendingDelta += durationTicks
+                continue
+            }
+
+            val primaryPitch = note.pitches[0].coerceIn(0, 127)
 
             // Note on (delta time includes any accumulated rests)
             writeVarLen(track, pendingDelta)
             track.write(NOTE_ON.toInt())
-            track.write(pitch)
+            track.write(primaryPitch)
             track.write(velocity)
 
             // Chord notes: additional note-on events with delta = 0
-            if (note.isChord) {
-                for (chordPitch in note.chordPitches) {
+            if (note.pitches.size > 1) {
+                for (i in 1 until note.pitches.size) {
                     writeVarLen(track, 0) // simultaneous
                     track.write(NOTE_ON.toInt())
-                    track.write(chordPitch.coerceIn(0, 127))
+                    track.write(note.pitches[i].coerceIn(0, 127))
                     track.write(velocity)
                 }
             }
@@ -123,15 +129,15 @@ class MidiWriter {
             // Note off after duration (primary note)
             writeVarLen(track, durationTicks)
             track.write(NOTE_OFF.toInt())
-            track.write(pitch)
+            track.write(primaryPitch)
             track.write(0)  // release velocity
 
             // Chord note-off events with delta = 0
-            if (note.isChord) {
-                for (chordPitch in note.chordPitches) {
+            if (note.pitches.size > 1) {
+                for (i in 1 until note.pitches.size) {
                     writeVarLen(track, 0)
                     track.write(NOTE_OFF.toInt())
-                    track.write(chordPitch.coerceIn(0, 127))
+                    track.write(note.pitches[i].coerceIn(0, 127))
                     track.write(0)
                 }
             }

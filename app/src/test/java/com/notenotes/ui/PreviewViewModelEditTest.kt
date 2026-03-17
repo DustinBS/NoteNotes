@@ -216,8 +216,8 @@ class PreviewViewModelEditTest {
         vm.deleteSelectedNote()
         assertEquals(2, vm.notesList.value.size)
         // Remaining: note 0 (midi 60), note 2 (midi 64)
-        assertEquals(60, vm.notesList.value[0].midiPitch)
-        assertEquals(64, vm.notesList.value[1].midiPitch)
+        assertEquals(60, vm.notesList.value[0].pitches.first())
+        assertEquals(64, vm.notesList.value[1].pitches.first())
     }
 
     @Test
@@ -297,22 +297,18 @@ class PreviewViewModelEditTest {
     @Test
     fun copyChordFrom_copiesPitchAndTabPreservingTargetTiming() {
         val source = MusicalNote(
-            midiPitch = 57,
+            pitches = listOf(57, 60, 64),
             durationTicks = 4,
             type = "quarter",
-            chordPitches = listOf(60, 64),
-            chordStringFrets = listOf(Pair(4, 1), Pair(5, 0)),
-            guitarString = 3,
-            guitarFret = 2,
+            tabPositions = listOf(Pair(3, 2), Pair(4, 1), Pair(5, 0)),
             timePositionMs = 1000f,
             isManual = true
         )
         val target = MusicalNote(
-            midiPitch = 50,
+            pitches = listOf(50),
             durationTicks = 8,
             type = "half",
-            guitarString = 2,
-            guitarFret = 0,
+            tabPositions = listOf(Pair(2, 0)),
             timePositionMs = 3200f,
             isManual = true
         )
@@ -321,11 +317,11 @@ class PreviewViewModelEditTest {
         vm.copyChordFrom(sourceIndex = 0, targetIndex = 1)
 
         val updatedTarget = vm.notesList.value[1]
-        assertEquals(57, updatedTarget.midiPitch)
-        assertEquals(3, updatedTarget.guitarString)
-        assertEquals(2, updatedTarget.guitarFret)
-        assertEquals(listOf(60, 64), updatedTarget.chordPitches)
-        assertEquals(listOf(Pair(4, 1), Pair(5, 0)), updatedTarget.safeChordStringFrets)
+        assertEquals(57, updatedTarget.pitches.first())
+        assertEquals(3, updatedTarget.tabPositions.first().first)
+        assertEquals(2, updatedTarget.tabPositions.first().second)
+          assertEquals(listOf(57, 60, 64), updatedTarget.pitches)
+          assertEquals(listOf(Pair(3, 2), Pair(4, 1), Pair(5, 0)), updatedTarget.tabPositions)
         assertEquals(3200f, updatedTarget.timePositionMs!!, 0.01f)
     }
 
@@ -334,16 +330,16 @@ class PreviewViewModelEditTest {
     @Test
     fun moveNoteToFraction_updatesStartTimeAndClearsCursor() {
         val notes = listOf(
-            quarterNote(60).copy(isManual = true, timePositionMs = 0f, guitarString = 3, guitarFret = 2),
-            quarterNote(62).copy(isManual = true, timePositionMs = 2000f, guitarString = 2, guitarFret = 0),
-            quarterNote(64).copy(isManual = true, timePositionMs = 4000f, guitarString = 1, guitarFret = 1)
+            quarterNote(60).copy(isManual = true, timePositionMs = 0f, tabPositions = listOf(Pair(3, 2))),
+            quarterNote(62).copy(isManual = true, timePositionMs = 2000f, tabPositions = listOf(Pair(2, 0))),
+            quarterNote(64).copy(isManual = true, timePositionMs = 4000f, tabPositions = listOf(Pair(1, 1)))
         )
         setNotesAndTempo(notes, tempoBpm = 120)
         vm.setEditCursor(0.25f)
 
         vm.moveNoteToFraction(noteIndex = 0, startFraction = 0.6f)
 
-        val moved = vm.notesList.value.firstOrNull { it.midiPitch == 60 }
+        val moved = vm.notesList.value.firstOrNull { it.pitches.first() == 60 }
         assertNotNull(moved)
         assertTrue(moved!!.isManual)
         assertTrue(abs((moved.timePositionMs ?: 0f) - 6000f) < 0.1f)
@@ -421,7 +417,7 @@ class PreviewViewModelEditTest {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private fun quarterNote(midi: Int) = MusicalNote(
-        midiPitch = midi,
+        pitches = listOf(midi),
         durationTicks = 4,
         type = "quarter"
     )

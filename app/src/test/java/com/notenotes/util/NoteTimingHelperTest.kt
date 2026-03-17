@@ -35,7 +35,7 @@ class NoteTimingHelperTest {
     @Test
     fun computeNoteStartMs_manualNoteWithoutPosition_fallsToCumulative() {
         // isManual=true but timePositionMs=null → falls back to cumulative
-        val note = MusicalNote(midiPitch = 60, durationTicks = 4, type = "quarter", isManual = true)
+        val note = MusicalNote(pitches = listOf(60), durationTicks = 4, type = "quarter", isManual = true)
         val startMs = NoteTimingHelper.computeNoteStartMs(note, cumulativeMs = 750f)
         assertEquals(750f, startMs, 0.01f)
     }
@@ -45,7 +45,7 @@ class NoteTimingHelperTest {
         // isManual=false but timePositionMs set → uses timePositionMs (not cumulative).
         // computeNoteStartMs uses timePositionMs whenever it is set, regardless
         // of isManual, so the sheet-music cursor stays in sync with the Notes tab.
-        val note = MusicalNote(midiPitch = 60, durationTicks = 4, type = "quarter",
+        val note = MusicalNote(pitches = listOf(60), durationTicks = 4, type = "quarter",
             isManual = false, timePositionMs = 999f)
         val startMs = NoteTimingHelper.computeNoteStartMs(note, cumulativeMs = 200f)
         assertEquals(999f, startMs, 0.01f)
@@ -205,8 +205,8 @@ class NoteTimingHelperTest {
     @Test
     fun computeNoteTimings_mixedDurations() {
         val notes = listOf(
-            MusicalNote(midiPitch = 60, durationTicks = 8, type = "half"),    // 1000ms
-            MusicalNote(midiPitch = 62, durationTicks = 2, type = "eighth")   // 250ms
+            MusicalNote(pitches = listOf(60), durationTicks = 8, type = "half"),    // 1000ms
+            MusicalNote(pitches = listOf(62), durationTicks = 2, type = "eighth")   // 250ms
         )
         val timings = NoteTimingHelper.computeNoteTimings(notes, 120)
 
@@ -256,13 +256,13 @@ class NoteTimingHelperTest {
     // ══════════════════════════════════════════════════════════════════════
 
     private fun quarterNote(midi: Int) = MusicalNote(
-        midiPitch = midi,
+        pitches = listOf(midi),
         durationTicks = 4,
         type = "quarter"
     )
 
     private fun manualNote(midi: Int, timeMs: Float) = MusicalNote(
-        midiPitch = midi,
+        pitches = listOf(midi),
         durationTicks = 4,
         type = "quarter",
         isManual = true,

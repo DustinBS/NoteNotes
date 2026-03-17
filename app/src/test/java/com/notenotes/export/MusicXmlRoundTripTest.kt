@@ -25,74 +25,64 @@ class MusicXmlRoundTripTest {
     // The starship og notes — the exact MusicalNote objects (manual notes with chords)
     private val starshipNotes = listOf(
         MusicalNote(
-            midiPitch = 45, durationTicks = 14, type = "half", isManual = true,
+            pitches = listOf(45, 52, 57, 60), durationTicks = 14, type = "half", isManual = true,
             timePositionMs = 2214.3555f, velocity = 80,
-            chordPitches = listOf(52, 57, 60),
-            chordStringFrets = listOf(Pair(2, 2), Pair(3, 2), Pair(4, 1)),
-            chordName = "Chord",
-            guitarString = 1, guitarFret = 0
+            tabPositions = listOf(Pair(1, 0), Pair(2, 2), Pair(3, 2), Pair(4, 1)),
+            chordName = "Chord"
         ),
         MusicalNote(
-            midiPitch = 45, durationTicks = 47, type = "whole", isManual = true,
+            pitches = listOf(45), durationTicks = 47, type = "whole", isManual = true,
             timePositionMs = 4053.955f, velocity = 80,
-            guitarString = 1, guitarFret = 0
+            tabPositions = listOf(Pair(1, 0))
         ),
         MusicalNote(
-            midiPitch = 52, durationTicks = 28, type = "whole", isManual = true,
+            pitches = listOf(52, 59, 64, 67), durationTicks = 28, type = "whole", isManual = true,
             timePositionMs = 10052.61f, velocity = 80,
-            chordPitches = listOf(59, 64, 67),
-            chordStringFrets = listOf(Pair(3, 4), Pair(4, 5), Pair(5, 3)),
-            chordName = "Chord",
-            guitarString = 2, guitarFret = 2
+            tabPositions = listOf(Pair(2, 2), Pair(3, 4), Pair(4, 5), Pair(5, 3)),
+            chordName = "Chord"
         ),
         MusicalNote(
-            midiPitch = 64, durationTicks = 32, type = "whole", isManual = true,
+            pitches = listOf(64), durationTicks = 32, type = "whole", isManual = true,
             timePositionMs = 13616.391f, velocity = 80,
-            guitarString = 5, guitarFret = 0
+            tabPositions = listOf(Pair(5, 0))
         ),
         MusicalNote(
-            midiPitch = 45, durationTicks = 74, type = "whole", isManual = true,
+            pitches = listOf(45, 52, 57, 60), durationTicks = 74, type = "whole", isManual = true,
             timePositionMs = 17719.193f, velocity = 80,
-            chordPitches = listOf(52, 57, 60),
-            chordStringFrets = listOf(Pair(2, 2), Pair(3, 2), Pair(4, 1)),
-            chordName = "Chord",
-            guitarString = 1, guitarFret = 0
+            tabPositions = listOf(Pair(1, 0), Pair(2, 2), Pair(3, 2), Pair(4, 1)),
+            chordName = "Chord"
         ),
         MusicalNote(
-            midiPitch = 52, durationTicks = 25, type = "whole", isManual = true,
+            pitches = listOf(52, 59, 64, 67), durationTicks = 25, type = "whole", isManual = true,
             timePositionMs = 27001.225f, velocity = 80,
-            chordPitches = listOf(59, 64, 67),
-            chordStringFrets = listOf(Pair(3, 4), Pair(4, 5), Pair(5, 3)),
-            chordName = "Chord",
-            guitarString = 2, guitarFret = 2
+            tabPositions = listOf(Pair(2, 2), Pair(3, 4), Pair(4, 5), Pair(5, 3)),
+            chordName = "Chord"
         ),
         MusicalNote(
-            midiPitch = 76, durationTicks = 19, type = "whole", isManual = true,
+            pitches = listOf(76), durationTicks = 19, type = "whole", isManual = true,
             timePositionMs = 30183.422f, velocity = 80,
-            guitarString = 5, guitarFret = 12
+            tabPositions = listOf(Pair(5, 12))
         ),
         MusicalNote(
-            midiPitch = 74, durationTicks = 12, type = "half", isManual = true,
+            pitches = listOf(74), durationTicks = 12, type = "half", isManual = true,
             timePositionMs = 32652.836f, velocity = 80,
-            guitarString = 5, guitarFret = 10
+            tabPositions = listOf(Pair(5, 10))
         ),
         MusicalNote(
-            midiPitch = 71, durationTicks = 21, type = "whole", isManual = true,
+            pitches = listOf(71), durationTicks = 21, type = "whole", isManual = true,
             timePositionMs = 34233.645f, velocity = 80,
-            guitarString = 5, guitarFret = 7
+            tabPositions = listOf(Pair(5, 7))
         ),
         MusicalNote(
-            midiPitch = 45, durationTicks = 12, type = "half", isManual = true,
+            pitches = listOf(45, 52, 57, 60), durationTicks = 12, type = "half", isManual = true,
             timePositionMs = 36936.562f, velocity = 80,
-            chordPitches = listOf(52, 57, 60),
-            chordStringFrets = listOf(Pair(2, 2), Pair(3, 2), Pair(4, 1)),
-            chordName = "Chord",
-            guitarString = 1, guitarFret = 0
+            tabPositions = listOf(Pair(1, 0), Pair(2, 2), Pair(3, 2), Pair(4, 1)),
+            chordName = "Chord"
         ),
         MusicalNote(
-            midiPitch = 64, durationTicks = 27, type = "whole", isManual = true,
+            pitches = listOf(64), durationTicks = 27, type = "whole", isManual = true,
             timePositionMs = 38436.805f, velocity = 80,
-            guitarString = 5, guitarFret = 0
+            tabPositions = listOf(Pair(5, 0))
         )
     )
 
@@ -130,8 +120,8 @@ class MusicXmlRoundTripTest {
         val result = buildResult(starshipNotes)
         val xml = generator.generateMusicXml(result)
         val parsed = parser.parse(xml, 120)
-        val expectedPitches = starshipNotes.map { it.midiPitch }
-        val actualPitches = parsed.notes.map { it.midiPitch }
+        val expectedPitches = starshipNotes.map { it.pitches.first() }
+        val actualPitches = parsed.notes.map { it.pitches.first() }
         assertEquals("Pitches should survive round-trip", expectedPitches, actualPitches)
     }
 
@@ -153,8 +143,8 @@ class MusicXmlRoundTripTest {
         for (i in starshipNotes.indices) {
             assertEquals(
                 "Chord pitches for note $i should survive round-trip",
-                starshipNotes[i].chordPitches,
-                parsed.notes[i].chordPitches
+                starshipNotes[i].pitches,
+                parsed.notes[i].pitches
             )
         }
     }
@@ -167,8 +157,8 @@ class MusicXmlRoundTripTest {
         for (i in starshipNotes.indices) {
             assertEquals(
                 "Chord string/frets for note $i should survive round-trip",
-                starshipNotes[i].chordStringFrets,
-                parsed.notes[i].chordStringFrets
+                starshipNotes[i].tabPositions,
+                parsed.notes[i].tabPositions
             )
         }
     }
@@ -181,11 +171,11 @@ class MusicXmlRoundTripTest {
         for (i in starshipNotes.indices) {
             assertEquals(
                 "Guitar string for note $i",
-                starshipNotes[i].guitarString, parsed.notes[i].guitarString
+                starshipNotes[i].tabPositions.first().first, parsed.notes[i].tabPositions.first().first
             )
             assertEquals(
                 "Guitar fret for note $i",
-                starshipNotes[i].guitarFret, parsed.notes[i].guitarFret
+                starshipNotes[i].tabPositions.first().second, parsed.notes[i].tabPositions.first().second
             )
         }
     }
@@ -224,8 +214,8 @@ class MusicXmlRoundTripTest {
         val rawXml = generator.generateMusicXml(result)
         val xml = MusicXmlSanitizer.sanitize(rawXml)
         val parsed = parser.parse(xml, 120)
-        val expectedPitches = starshipNotes.map { it.midiPitch }
-        val actualPitches = parsed.notes.map { it.midiPitch }
+        val expectedPitches = starshipNotes.map { it.pitches.first() }
+        val actualPitches = parsed.notes.map { it.pitches.first() }
         assertEquals("Pitches should survive sanitized round-trip", expectedPitches, actualPitches)
     }
 
@@ -258,8 +248,8 @@ class MusicXmlRoundTripTest {
         for (i in starshipNotes.indices) {
             assertEquals(
                 "Chord pitches for note $i should survive sanitized round-trip",
-                starshipNotes[i].chordPitches,
-                parsed.notes[i].chordPitches
+                starshipNotes[i].pitches,
+                parsed.notes[i].pitches
             )
         }
     }
@@ -279,8 +269,8 @@ class MusicXmlRoundTripTest {
         assertEquals("Note count stable across 2 round-trips", parsed1.notes.size, parsed2.notes.size)
         assertEquals(
             "Pitches stable across 2 round-trips",
-            parsed1.notes.map { it.midiPitch },
-            parsed2.notes.map { it.midiPitch }
+            parsed1.notes.map { it.pitches.first() },
+            parsed2.notes.map { it.pitches.first() }
         )
         assertEquals(
             "Durations stable across 2 round-trips",
@@ -303,8 +293,8 @@ class MusicXmlRoundTripTest {
         val xml = generator.generateMusicXml(result)
         val parsed = parser.parse(xml, 60)
 
-        val expectedPitches = starshipNotes.map { it.midiPitch }
-        val actualPitches = parsed.notes.map { it.midiPitch }
+        val expectedPitches = starshipNotes.map { it.pitches.first() }
+        val actualPitches = parsed.notes.map { it.pitches.first() }
         assertEquals("Pitches preserved at 60 BPM", expectedPitches, actualPitches)
     }
 
@@ -326,7 +316,7 @@ class MusicXmlRoundTripTest {
     @Test
     fun roundTrip_simpleWholeNote_preserved() {
         val notes = listOf(
-            MusicalNote(midiPitch = 60, durationTicks = 16, type = "whole")
+            MusicalNote(pitches = listOf(60), durationTicks = 16, type = "whole")
         )
         val result = TranscriptionResult(
             notes = notes, tempoBpm = 120,
@@ -335,7 +325,7 @@ class MusicXmlRoundTripTest {
         val xml = generator.generateMusicXml(result)
         val parsed = parser.parse(xml, 120)
         assertEquals(1, parsed.notes.size)
-        assertEquals(60, parsed.notes[0].midiPitch)
+        assertEquals(60, parsed.notes[0].pitches.first())
         assertEquals(16, parsed.notes[0].durationTicks)
     }
 
@@ -343,7 +333,7 @@ class MusicXmlRoundTripTest {
     fun roundTrip_differentPitches_allPreserved() {
         val pitches = listOf(40, 45, 52, 60, 64, 67, 71, 74, 76, 84)
         val notes = pitches.map { p ->
-            MusicalNote(midiPitch = p, durationTicks = 4, type = "quarter")
+            MusicalNote(pitches = listOf(p), durationTicks = 4, type = "quarter")
         }
         val result = TranscriptionResult(
             notes = notes, tempoBpm = 120,
@@ -352,14 +342,14 @@ class MusicXmlRoundTripTest {
         val xml = generator.generateMusicXml(result)
         val parsed = parser.parse(xml, 120)
         assertEquals(pitches.size, parsed.notes.size)
-        assertEquals(pitches, parsed.notes.map { it.midiPitch })
+        assertEquals(pitches, parsed.notes.map { it.pitches.first() })
     }
 
     @Test
     fun roundTrip_nonStandardDuration_preserved() {
         // 14 ticks is non-standard (not 4, 8, 12, 16) — gets decomposed into ties
         val notes = listOf(
-            MusicalNote(midiPitch = 60, durationTicks = 14, type = "half")
+            MusicalNote(pitches = listOf(60), durationTicks = 14, type = "half")
         )
         val result = TranscriptionResult(
             notes = notes, tempoBpm = 120,
@@ -368,7 +358,7 @@ class MusicXmlRoundTripTest {
         val xml = generator.generateMusicXml(result)
         val parsed = parser.parse(xml, 120)
         assertEquals(1, parsed.notes.size)
-        assertEquals(60, parsed.notes[0].midiPitch)
+        assertEquals(60, parsed.notes[0].pitches.first())
         assertEquals(14, parsed.notes[0].durationTicks)
     }
 
@@ -376,7 +366,7 @@ class MusicXmlRoundTripTest {
     fun roundTrip_47ticks_preserved() {
         // 47 ticks — highly non-standard, gets decomposed into 16+16+12+2+1
         val notes = listOf(
-            MusicalNote(midiPitch = 45, durationTicks = 47, type = "whole")
+            MusicalNote(pitches = listOf(45), durationTicks = 47, type = "whole")
         )
         val result = TranscriptionResult(
             notes = notes, tempoBpm = 120,
@@ -385,7 +375,7 @@ class MusicXmlRoundTripTest {
         val xml = generator.generateMusicXml(result)
         val parsed = parser.parse(xml, 120)
         assertEquals(1, parsed.notes.size)
-        assertEquals(45, parsed.notes[0].midiPitch)
+        assertEquals(45, parsed.notes[0].pitches.first())
         assertEquals(47, parsed.notes[0].durationTicks)
     }
 }

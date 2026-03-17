@@ -33,7 +33,7 @@ class BpmReQuantizationTest {
     )
 
     private fun note(midi: Int, ticks: Int, timeMs: Float) = MusicalNote(
-        midiPitch = midi,
+        pitches = listOf(midi),
         durationTicks = ticks,
         type = "quarter",
         isManual = true,
@@ -232,7 +232,7 @@ class BpmReQuantizationTest {
         for (i in starshipNotes120.indices) {
             assertEquals(
                 "Pitch should be preserved for note $i",
-                starshipNotes120[i].midiPitch, result[i].midiPitch
+                starshipNotes120[i].pitches.first(), result[i].pitches.first()
             )
         }
     }

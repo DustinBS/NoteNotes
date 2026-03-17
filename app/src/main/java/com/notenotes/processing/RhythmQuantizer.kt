@@ -82,12 +82,14 @@ class RhythmQuantizer(
 
             // Quantize the note duration
             val durationBeats = note.durationSeconds / beatDurationSec
-            val quantizedNotes = quantizeDuration(durationBeats, isRest = false, midiPitch = note.midiNote)
+            val quantizedNotes = quantizeDuration(durationBeats, isRest = false, pitches = listOf(note.midiNote))
             // Carry chord info through to all quantized notes
             if (note.isChord) {
+                val fullPitches = mutableListOf(note.midiNote)
+                fullPitches.addAll(note.chordMidiNotes)
                 result.addAll(quantizedNotes.map { qn ->
                     qn.copy(
-                        chordPitches = note.chordMidiNotes,
+                        pitches = fullPitches,
                         chordName = note.chordName
                     )
                 })
@@ -106,21 +108,21 @@ class RhythmQuantizer(
     fun quantizeDuration(
         durationBeats: Double,
         isRest: Boolean = false,
-        midiPitch: Int = 60
+        pitches: List<Int> = listOf(60)
     ): List<MusicalNote> {
         if (durationBeats <= 0) return emptyList()
 
         // Find the best matching candidate
         val best = findBestDuration(durationBeats)
-            ?: return listOf(createNote("quarter", 4, false, isRest, midiPitch))
+            ?: return listOf(createNote("quarter", 4, false, isRest, pitches))
 
         // If the duration is significantly longer than any single note value (>4 beats),
         // split into tied notes
         if (durationBeats > 4.5) {
-            return splitLongDuration(durationBeats, isRest, midiPitch)
+            return splitLongDuration(durationBeats, isRest, pitches)
         }
 
-        return listOf(createNote(best.name, best.divisions, best.dotted, isRest, midiPitch))
+        return listOf(createNote(best.name, best.divisions, best.dotted, isRest, pitches))
     }
 
     /**
@@ -158,7 +160,7 @@ class RhythmQuantizer(
     private fun splitLongDuration(
         durationBeats: Double,
         isRest: Boolean,
-        midiPitch: Int
+        pitches: List<Int>
     ): List<MusicalNote> {
         val notes = mutableListOf<MusicalNote>()
         var remaining = durationBeats
@@ -171,12 +173,12 @@ class RhythmQuantizer(
                 ?: break
 
             val needsTie = remaining - best.beatsMultiplier > 0.2 && !isRest
-            notes.add(createNote(best.name, best.divisions, best.dotted, isRest, midiPitch, tiedToNext = needsTie))
+            notes.add(createNote(best.name, best.divisions, best.dotted, isRest, pitches, tiedToNext = needsTie))
             remaining -= best.beatsMultiplier
         }
 
         if (notes.isEmpty()) {
-            notes.add(createNote("quarter", 4, false, isRest, midiPitch))
+            notes.add(createNote("quarter", 4, false, isRest, pitches))
         }
 
         return notes
@@ -190,11 +192,11 @@ class RhythmQuantizer(
         divisions: Int,
         dotted: Boolean,
         isRest: Boolean,
-        midiPitch: Int,
+        pitches: List<Int>,
         tiedToNext: Boolean = false
     ): MusicalNote {
         return MusicalNote(
-            midiPitch = if (isRest) 0 else midiPitch,
+            pitches = if (isRest) listOf(0) else pitches,
             durationTicks = divisions,
             type = type,
             dotted = dotted,
