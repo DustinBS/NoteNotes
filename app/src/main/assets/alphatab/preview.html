@@ -19,6 +19,10 @@
         #alphaTab {
             width: 100%;
             min-height: 300px;
+            background-color: #FFFFFF;
+        }
+        .at-surface {
+            background-color: #FFFFFF;
         }
         #loading {
             display: flex;
@@ -117,8 +121,8 @@
                 api.renderFinished.on(function() {
                     var surface = document.querySelector('.at-surface');
                     pdfLog('renderFinished: surface=' + (surface ? surface.offsetWidth + 'x' + surface.offsetHeight : 'null') + ', container=' + document.getElementById('alphaTab').offsetWidth);
-                    // Set body background to white now that content is rendered
-                    document.body.style.backgroundColor = '#FFFFFF';
+                    // Keep transparent background to avoid first-load white flash in the host WebView.
+                    document.body.style.backgroundColor = 'transparent';
                     if (window.Android) {
                         window.Android.onRenderComplete();
                     }
@@ -360,9 +364,21 @@
 
                 // Position the beat cursor line
                 if (beatCursor) {
+                    var beatX = beatBounds.visualBounds.x;
+                    if (typeof beatBounds.onNotes !== 'undefined' && beatBounds.onNotes && beatBounds.onNotes.length > 0) {
+                        var firstNoteBounds = beatBounds.onNotes[0];
+                        if (firstNoteBounds && firstNoteBounds.noteHeadBounds && typeof firstNoteBounds.noteHeadBounds.x === 'number') {
+                            beatX = firstNoteBounds.noteHeadBounds.x;
+                        } else if (firstNoteBounds && firstNoteBounds.visualBounds && typeof firstNoteBounds.visualBounds.x === 'number') {
+                            beatX = firstNoteBounds.visualBounds.x;
+                        }
+                    } else if (typeof beatBounds.visualBounds.w === 'number') {
+                        beatX = beatBounds.visualBounds.x + Math.min(10, beatBounds.visualBounds.w * 0.18);
+                    }
+
                     beatCursor.style.display = 'block';
                     beatCursor.style.top = beatBounds.visualBounds.y + 'px';
-                    beatCursor.style.left = beatBounds.visualBounds.x + 'px';
+                    beatCursor.style.left = Math.round(beatX) + 'px';
                     beatCursor.style.width = '3px';
                     beatCursor.style.height = beatBounds.visualBounds.h + 'px';
                 }

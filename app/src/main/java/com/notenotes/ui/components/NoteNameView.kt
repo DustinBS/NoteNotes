@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -22,8 +23,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.notenotes.model.MusicalNote
@@ -202,6 +208,7 @@ fun NoteNameView(
             NoteNameRow(
                 note = note,
                 index = index + 1,
+                tempoBpm = tempoBpm,
                 timePositionSeconds = timePositionSeconds,
                 isCurrentlyPlaying = index == currentNoteIndex,
                 onClick = if (onUpdateNote != null || onDeleteNote != null) {
@@ -257,44 +264,14 @@ private fun NoteNameChip(
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Medium
             )
-        } else if (note.isChord && note.chordName != null) {
-            // Show chord name
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = note.chordName!!,
-                    color = textColor,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                // Show individual notes below
-                val noteNames = note.allPitches.map { midiToDisplayName(it) }
-                Text(
-                    text = noteNames.joinToString(" "),
-                    color = textColor.copy(alpha = 0.7f),
-                    fontSize = 10.sp
-                )
-            }
-        } else if (note.isChord) {
-            // Chord without identified name — show stacked note names
-            val noteNames = note.allPitches.map { midiToDisplayName(it) }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                for (name in noteNames.reversed()) { // top to bottom = high to low
-                    Text(
-                        text = name,
-                        color = textColor,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        lineHeight = 14.sp
-                    )
-                }
-            }
         } else {
-            // Single note
+            val displayText = buildPitchFretAnnotated(note)
             Text(
-                text = midiToDisplayName(note.midiPitch),
-                color = textColor,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
+                text = displayText,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                lineHeight = 14.sp
             )
         }
     }
@@ -304,6 +281,7 @@ private fun NoteNameChip(
 private fun NoteNameRow(
     note: MusicalNote,
     index: Int,
+    tempoBpm: Int,
     timePositionSeconds: Double,
     isCurrentlyPlaying: Boolean = false,
     onClick: (() -> Unit)? = null
@@ -331,15 +309,6 @@ private fun NoteNameRow(
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Always show time in seconds — consistent with transport controls
-        val posLabel = String.format("%.1fs", timePositionSeconds)
-        Text(
-            text = posLabel,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(44.dp)
-        )
-
         // Note name(s)
         if (note.isRest) {
             Text(
@@ -351,40 +320,18 @@ private fun NoteNameRow(
             )
         } else if (note.isChord) {
             Column(modifier = Modifier.weight(1f)) {
-                if (note.chordName != null) {
-                    Text(
-                        text = note.chordName!!,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                val noteNames = note.allPitches.map { midiToDisplayName(it) }
                 Text(
-                    text = noteNames.joinToString("  "),
+                    text = buildPitchFretAnnotated(note),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold
                 )
             }
         } else {
             Text(
-                text = midiToDisplayName(note.midiPitch),
+                text = buildPitchFretAnnotated(note),
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
-            )
-        }
-
-        // Guitar tab info if available
-        if (note.hasTab) {
-            val stringNames = arrayOf("E2", "A2", "D3", "G3", "B3", "E4")
-            val sName = if ((note.guitarString ?: 0) in stringNames.indices)
-                stringNames[note.guitarString!!] else "?"
-            Text(
-                text = "${sName} F${note.guitarFret ?: 0}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.tertiary,
-                modifier = Modifier.width(50.dp)
             )
         }
 
@@ -399,14 +346,24 @@ private fun NoteNameRow(
             Spacer(modifier = Modifier.width(4.dp))
         }
 
-        // Duration type
-        Text(
-            text = durationSymbol(note.type, note.dotted),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.End,
-            modifier = Modifier.width(40.dp)
-        )
+        // Right-side metadata: timestamp + duration
+        Column(
+            modifier = Modifier.width(52.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            Text(
+                text = formatTimestamp(timePositionSeconds),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.End
+            )
+            Text(
+                text = String.format("%.2fs", durationSeconds(note, tempoBpm)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.End
+            )
+        }
     }
 }
 
@@ -422,6 +379,47 @@ private fun midiToDisplayName(midiNote: Int): String {
     val octave = (midiNote / 12) - 1
     val noteIndex = midiNote % 12
     return "${SHARP_NAMES[noteIndex]}$octave"
+}
+
+private fun formatTimestamp(seconds: Double): String {
+    val totalSeconds = seconds.toInt().coerceAtLeast(0)
+    val minutes = totalSeconds / 60
+    val secs = totalSeconds % 60
+    return String.format("%d:%02d", minutes, secs)
+}
+
+private fun durationSeconds(note: MusicalNote, tempoBpm: Int): Float {
+    val tickDurationSec = 60f / tempoBpm.coerceAtLeast(1) / 4f
+    return note.durationTicks.coerceAtLeast(0) * tickDurationSec
+}
+
+private fun buildPitchEntries(note: MusicalNote): List<Triple<Int, Int, Int>> {
+    val entries = mutableListOf(Triple(note.midiPitch, note.guitarString ?: 0, note.guitarFret ?: 0))
+    val safeChordSF = note.safeChordStringFrets
+    for (i in note.chordPitches.indices) {
+        val sf = if (i < safeChordSF.size) safeChordSF[i] else Pair(0, 0)
+        entries.add(Triple(note.chordPitches[i], sf.first, sf.second))
+    }
+    return entries.sortedBy { it.first }
+}
+
+private fun buildPitchFretAnnotated(note: MusicalNote) = buildAnnotatedString {
+    val entries = buildPitchEntries(note)
+    entries.forEachIndexed { idx, (pitch, stringIndex, fret) ->
+        val stringColor = if (stringIndex in GuitarUtils.STRINGS.indices)
+            Color(GuitarUtils.STRINGS[stringIndex].colorArgb)
+        else Color.Unspecified
+
+        withStyle(SpanStyle(color = stringColor, fontWeight = FontWeight.SemiBold)) {
+            append(midiToDisplayName(pitch))
+        }
+        if (!note.isRest && (note.isChord || note.hasTab)) {
+            withStyle(SpanStyle(color = stringColor, fontSize = 8.sp, baselineShift = BaselineShift.Superscript)) {
+                append(fret.toString())
+            }
+        }
+        if (idx != entries.lastIndex) append(" ")
+    }
 }
 
 /**
@@ -530,7 +528,6 @@ private fun NoteEditDialog(
     }
 
     val editedPrimaryMidi = GuitarUtils.toMidi(editedPrimaryString, editedPrimaryFret)
-    val currentNoteName = PitchUtils.midiToNoteName(editedPrimaryMidi)
 
     // Discard warning dialog
     if (showDiscardWarning) {
@@ -573,202 +570,166 @@ private fun NoteEditDialog(
         },
         text = {
             Column {
-                // Show all notes in chord (also when user adds notes to a single note)
                 val isChordEditing = note.isChord || editableChordPitches.isNotEmpty()
-                if (isChordEditing) {
-                    Text(
-                        text = "Chord Notes",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "String Selector",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Tap a string row to add/edit notes.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
 
-                    // Primary note — shows original → current if changed
-                    val primaryChanged = editedPrimaryString != originalPrimaryString || editedPrimaryFret != originalPrimaryFret
-                    val primaryStringColor = if (editedPrimaryString in GuitarUtils.STRINGS.indices)
-                        Color(GuitarUtils.STRINGS[editedPrimaryString].colorArgb)
-                    else MaterialTheme.colorScheme.primary
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(4.dp))
-                            .border(
-                                width = if (editingChordPitchIndex == null) 2.dp else 0.dp,
-                                color = if (editingChordPitchIndex == null) primaryStringColor else Color.Transparent,
-                                shape = RoundedCornerShape(4.dp)
-                            )
-                            .background(
-                                if (editingChordPitchIndex == null)
-                                    primaryStringColor.copy(alpha = 0.25f)
-                                else primaryStringColor.copy(alpha = 0.08f)
-                            )
-                            .clickable { editingChordPitchIndex = null }
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            if (primaryChanged) {
-                                // Show original
-                                val origLabel = GuitarUtils.STRINGS.getOrNull(originalPrimaryString)?.label ?: "?"
-                                Text(
-                                    text = "${midiToDisplayName(note.midiPitch)} - $origLabel Fret $originalPrimaryFret - MIDI ${note.midiPitch}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                // Show arrow and new value
-                                val newLabel = GuitarUtils.STRINGS.getOrNull(editedPrimaryString)?.label ?: "?"
-                                Text(
-                                    text = "\u2192 ${midiToDisplayName(editedPrimaryMidi)} - $newLabel Fret $editedPrimaryFret - MIDI $editedPrimaryMidi",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            } else {
-                                val gs = GuitarUtils.STRINGS.getOrNull(originalPrimaryString)
-                                val label = gs?.label ?: "?"
-                                Text(
-                                    text = "${midiToDisplayName(note.midiPitch)} - $label Fret $originalPrimaryFret - MIDI ${note.midiPitch}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                        Text(
-                            text = if (editingChordPitchIndex == null) "editing" else "tap to edit",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    // Additional chord pitches — show original → current if changed
-                    editableChordPitches.forEachIndexed { idx, pitch ->
-                        val origPitch = originalChordPitches.getOrNull(idx)
-                        val origPos = originalChordPositions.getOrNull(idx)
-                        val curPos = editableChordPositions.getOrNull(idx)
-                        val chordNoteChanged = origPitch != pitch || origPos != curPos
-
-                        val chordStringIdx = curPos?.first ?: 0
-                        val chordStringColor = if (chordStringIdx in GuitarUtils.STRINGS.indices)
-                            Color(GuitarUtils.STRINGS[chordStringIdx].colorArgb)
-                        else MaterialTheme.colorScheme.primary
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(4.dp))
-                                .border(
-                                    width = if (editingChordPitchIndex == idx) 2.dp else 0.dp,
-                                    color = if (editingChordPitchIndex == idx) chordStringColor else Color.Transparent,
-                                    shape = RoundedCornerShape(4.dp)
-                                )
-                                .background(
-                                    if (editingChordPitchIndex == idx)
-                                        chordStringColor.copy(alpha = 0.25f)
-                                    else chordStringColor.copy(alpha = 0.08f)
-                                )
-                                .clickable { editingChordPitchIndex = idx }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                if (chordNoteChanged && origPitch != null && origPos != null) {
-                                    val origLabel = GuitarUtils.STRINGS.getOrNull(origPos.first)?.label ?: "?"
-                                    Text(
-                                        text = "${midiToDisplayName(origPitch)} - $origLabel Fret ${origPos.second} - MIDI $origPitch",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    val newLabel = curPos?.let { GuitarUtils.STRINGS.getOrNull(it.first)?.label } ?: "?"
-                                    val newFret = curPos?.second ?: 0
-                                    Text(
-                                        text = "\u2192 ${midiToDisplayName(pitch)} - $newLabel Fret $newFret - MIDI $pitch",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                } else {
-                                    val label = curPos?.let { GuitarUtils.STRINGS.getOrNull(it.first)?.label } ?: "?"
-                                    val fret = curPos?.second ?: 0
-                                    Text(
-                                        text = "${midiToDisplayName(pitch)} - $label Fret $fret - MIDI $pitch",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = if (editingChordPitchIndex == idx) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                }
-                            }
-                            Row {
-                                if (editingChordPitchIndex == idx) {
-                                    Text(
-                                        text = "editing",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Icon(
-                                    Icons.Filled.Close,
-                                    contentDescription = "Remove",
-                                    modifier = Modifier
-                                        .size(18.dp)
-                                        .clickable {
-                                            editableChordPitches.removeAt(idx)
-                                            if (idx in editableChordPositions.indices) {
-                                                editableChordPositions.removeAt(idx)
-                                            }
-                                            // LIFO: select previous chord note, or null if none left
-                                            editingChordPitchIndex = if (editableChordPitches.isEmpty()) null
-                                                else (idx - 1).coerceAtLeast(0).coerceAtMost(editableChordPitches.size - 1)
-                                        },
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    HorizontalDivider()
-                    Spacer(modifier = Modifier.height(8.dp))
+                fun normalizedStringLabel(rawLabel: String): String {
+                    val trimmed = rawLabel.trim()
+                    val withoutPrefix = trimmed.dropWhile { it.isDigit() || it.isWhitespace() }
+                    val notePart = withoutPrefix
+                        .takeWhile { it.isLetter() || it == '#' || it == 'b' }
+                        .ifBlank { withoutPrefix }
+                    return notePart.ifBlank { trimmed }
                 }
 
-                // Current selection preview
-                Text(
-                    text = "${PitchUtils.midiToNoteName(GuitarUtils.toMidi(selectedStringIndex, selectedFret))} · MIDI ${GuitarUtils.toMidi(selectedStringIndex, selectedFret)}",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                fun formatEntry(entry: Triple<Int, Int, Int>): String {
+                    val pitch = entry.first
+                    val stringIndex = entry.second
+                    val fret = entry.third
+                    val rawLabel = GuitarUtils.STRINGS.getOrNull(stringIndex)?.label ?: "?"
+                    val stringLabel = normalizedStringLabel(rawLabel)
+                    val stringNumber = (GuitarUtils.STRINGS.size - stringIndex).coerceAtLeast(1)
+                    return "${midiToDisplayName(pitch)} | $stringNumber $stringLabel Fret $fret | MIDI $pitch"
+                }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // String selector
-                Text("String", style = MaterialTheme.typography.labelSmall)
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    GuitarUtils.STRINGS.forEachIndexed { index, gs ->
-                        val isSelected = index == selectedStringIndex
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (index in GuitarUtils.STRINGS.indices.reversed()) {
+                        val gs = GuitarUtils.STRINGS[index]
+                        val rowSelected = index == selectedStringIndex
                         val sColor = Color(gs.colorArgb)
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { selectedStringIndex = index },
-                            label = { Text(gs.label, fontSize = 10.sp, maxLines = 1, softWrap = false,
-                                color = if (isSelected) Color.White else sColor) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = sColor.copy(alpha = 0.15f),
-                                labelColor = sColor,
-                                selectedContainerColor = sColor,
-                                selectedLabelColor = Color.White
+
+                        val currentChordIndex = editableChordPositions.indexOfFirst { it.first == index }
+                        val currentEntry = when {
+                            index == editedPrimaryString -> Triple(editedPrimaryMidi, editedPrimaryString, editedPrimaryFret)
+                            currentChordIndex >= 0 -> {
+                                val sf = editableChordPositions[currentChordIndex]
+                                val pitch = editableChordPitches.getOrElse(currentChordIndex) { GuitarUtils.toMidi(sf.first, sf.second) }
+                                Triple(pitch, sf.first, sf.second)
+                            }
+                            else -> null
+                        }
+
+                        val originalChordIndex = originalChordPositions.indexOfFirst { it.first == index }
+                        val originalEntry = when {
+                            index == originalPrimaryString -> Triple(note.midiPitch, originalPrimaryString, originalPrimaryFret)
+                            originalChordIndex >= 0 -> {
+                                val sf = originalChordPositions[originalChordIndex]
+                                val pitch = originalChordPitches.getOrElse(originalChordIndex) { GuitarUtils.toMidi(sf.first, sf.second) }
+                                Triple(pitch, sf.first, sf.second)
+                            }
+                            else -> null
+                        }
+
+                        val isActive = currentEntry != null
+                        val changed = currentEntry != originalEntry
+                        val canRemove = currentChordIndex >= 0
+
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val existingChordIndex = editableChordPositions.indexOfFirst { it.first == index }
+                                    when {
+                                        index == editedPrimaryString -> {
+                                            editingChordPitchIndex = null
+                                            selectedStringIndex = editedPrimaryString
+                                            selectedFret = editedPrimaryFret
+                                        }
+                                        existingChordIndex >= 0 -> {
+                                            val sf = editableChordPositions[existingChordIndex]
+                                            editingChordPitchIndex = existingChordIndex
+                                            selectedStringIndex = sf.first
+                                            selectedFret = sf.second
+                                        }
+                                        isChordEditing -> {
+                                            val newFret = 0
+                                            val newMidi = GuitarUtils.toMidi(index, newFret)
+                                            editableChordPitches.add(newMidi)
+                                            editableChordPositions.add(Pair(index, newFret))
+                                            editingChordPitchIndex = editableChordPitches.size - 1
+                                            selectedStringIndex = index
+                                            selectedFret = newFret
+                                        }
+                                        else -> {
+                                            selectedStringIndex = index
+                                            if (currentEntry != null) selectedFret = currentEntry.third
+                                        }
+                                    }
+                                },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isActive) sColor.copy(alpha = 0.18f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            border = BorderStroke(
+                                width = if (rowSelected) 2.dp else 1.dp,
+                                color = if (rowSelected) MaterialTheme.colorScheme.primary
+                                else if (isActive) sColor
+                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
                             )
-                        )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    if (changed && originalEntry != null) {
+                                        Text(
+                                            text = formatEntry(originalEntry),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textDecoration = TextDecoration.LineThrough
+                                        )
+                                    }
+
+                                    if (currentEntry != null) {
+                                        Text(
+                                            text = formatEntry(currentEntry),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (rowSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isActive) sColor else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    } else {
+                                        val rowStringLabel = normalizedStringLabel(gs.label)
+                                        val rowStringNumber = (GuitarUtils.STRINGS.size - index).coerceAtLeast(1)
+                                        Text(
+                                            text = "- | $rowStringNumber $rowStringLabel Fret - | MIDI -",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                if (canRemove) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Icon(
+                                        imageVector = Icons.Filled.Close,
+                                        contentDescription = "Remove",
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .clickable {
+                                                editableChordPitches.removeAt(currentChordIndex)
+                                                editableChordPositions.removeAt(currentChordIndex)
+                                                editingChordPitchIndex = null
+                                                selectedStringIndex = editedPrimaryString
+                                                selectedFret = editedPrimaryFret
+                                            },
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -818,7 +779,7 @@ private fun NoteEditDialog(
                 }
 
                 // Same-string conflict warning
-                if (note.isChord) {
+                if (isChordEditing) {
                     val allStringIndices = mutableListOf(editedPrimaryString)
                     editableChordPositions.forEach { pos ->
                         allStringIndices.add(pos.first)
@@ -834,52 +795,39 @@ private fun NoteEditDialog(
                         )
                     }
                 }
-
-                // Button to add current note as new chord member
-                // Always available — allows turning single notes into chords too
-                val addMidi = GuitarUtils.toMidi(selectedStringIndex, selectedFret)
-                Spacer(modifier = Modifier.height(4.dp))
-                OutlinedButton(
-                    onClick = {
-                        // Find an unused string for the new note, defaulting to Low E fret 0
-                        val usedStrings = mutableSetOf(editedPrimaryString)
-                        editableChordPositions.forEach { usedStrings.add(it.first) }
-                        val unusedString = (0..5).firstOrNull { it !in usedStrings } ?: 0
-                        val newMidi = GuitarUtils.toMidi(unusedString, 0)
-                        editableChordPitches.add(newMidi)
-                        editableChordPositions.add(Pair(unusedString, 0))
-                        // Switch editing to the newly added note
-                        editingChordPitchIndex = editableChordPitches.size - 1
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add Note", fontSize = 12.sp)
-                }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                if ((note.isChord || editableChordPitches.isNotEmpty()) && onUpdateChordPitches != null) {
-                    onSave(noteIndex, editedPrimaryString, editedPrimaryFret)
-                    onUpdateChordPitches(noteIndex, editableChordPitches.toList(), editableChordPositions.toList())
-                } else {
-                    onSave(noteIndex, editedPrimaryString, editedPrimaryFret)
-                }
-            }) { Text("Save") }
-        },
-        dismissButton = {
             Row {
-                TextButton(
+                FilledTonalButton(
                     onClick = onDelete,
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("Delete") }
-                Spacer(modifier = Modifier.width(8.dp))
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Delete Chord")
+                }
+                Spacer(modifier = Modifier.weight(1f))
                 TextButton(onClick = {
                     if (hasUnsavedChanges) showDiscardWarning = true else onDismiss()
                 }) { Text("Cancel") }
+                TextButton(onClick = {
+                    if ((note.isChord || editableChordPitches.isNotEmpty()) && onUpdateChordPitches != null) {
+                        onSave(noteIndex, editedPrimaryString, editedPrimaryFret)
+                        onUpdateChordPitches(noteIndex, editableChordPitches.toList(), editableChordPositions.toList())
+                    } else {
+                        onSave(noteIndex, editedPrimaryString, editedPrimaryFret)
+                    }
+                }) { Text("Save") }
             }
-        }
+        },
+        dismissButton = null
     )
 }

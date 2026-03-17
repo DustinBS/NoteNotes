@@ -12,10 +12,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,6 +34,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -47,6 +52,7 @@ import com.notenotes.model.MelodyIdea
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
@@ -82,6 +88,11 @@ private fun groupColor(groupId: String, overrides: Map<String, Int>): Color {
     return GROUP_COLORS[abs(groupId.hashCode()) % GROUP_COLORS.size]
 }
 
+private fun compactGroupEdgeLabel(label: String): String {
+    val trimmed = label.trim()
+    return if (trimmed.length <= 13) trimmed else trimmed.take(10) + "..."
+}
+
 /** Generate a random vibrant colour whose hue is far from any existing group. */
 private fun pickRandomColor(existingArgbs: Collection<Int>): Color {
     val rng = Random()
@@ -109,7 +120,8 @@ enum class SortMode(val label: String) {
     DATE_DESC("Newest"),
     DATE_ASC("Oldest"),
     TITLE_AZ("A → Z"),
-    TITLE_ZA("Z → A")
+    TITLE_ZA("Z → A"),
+    RECENT("Recent")
 }
 
 // ──────────────────────────── ViewModel ────────────────────────────
@@ -117,6 +129,7 @@ enum class SortMode(val label: String) {
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
     private val dao = AppDatabase.getDatabase(application).melodyDao()
     private val prefs = application.getSharedPreferences("notenotes_group_colors", Context.MODE_PRIVATE)
+    private val libraryPrefs = application.getSharedPreferences("notenotes_library_prefs", Context.MODE_PRIVATE)
     val ideas = dao.getAllIdeas()
     val trashIdeas = dao.getTrashIdeas()
 
@@ -148,10 +161,21 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         _groupColorOverrides.value = prefs.all.mapNotNull { (key, value) ->
             (value as? Int)?.let { key to it }
         }.toMap()
+
+        val savedSort = libraryPrefs.getString("sort_mode", null)
+        val restoredSort = savedSort?.let { raw ->
+            runCatching { SortMode.valueOf(raw) }.getOrNull()
+        }
+        if (restoredSort != null) {
+            _sortMode.value = restoredSort
+        }
     }
 
     fun setSearchQuery(query: String) { _searchQuery.value = query }
-    fun setSortMode(mode: SortMode) { _sortMode.value = mode }
+    fun setSortMode(mode: SortMode) {
+        _sortMode.value = mode
+        libraryPrefs.edit().putString("sort_mode", mode.name).apply()
+    }
 
     // ── Selection ──
 
@@ -163,8 +187,19 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     fun clearSelection() { _selectedIds.value = emptySet() }
 
+    /** Add an item to selection without toggling (used by drag-to-select). */
+    fun addToSelection(id: Long) {
+        _selectedIds.value = _selectedIds.value + id
+    }
+
     fun selectAll(ideas: List<MelodyIdea>) {
         _selectedIds.value = ideas.map { it.id }.toSet()
+    }
+
+    fun updateLastOpenedAt(id: Long) {
+        viewModelScope.launch {
+            dao.updateLastOpenedAt(id, System.currentTimeMillis())
+        }
     }
 
     // ── Grouping ──
@@ -669,6 +704,16 @@ fun LibraryScreen(
     val sortMode by viewModel.sortMode.collectAsState()
     val colorOverrides by viewModel.groupColorOverrides.collectAsState()
     val haptic = LocalHapticFeedback.current
+    val listState = rememberLazyListState()
+
+    // Keep list navigation predictable when sort mode changes.
+    var previousSortMode by remember { mutableStateOf(sortMode) }
+    LaunchedEffect(sortMode) {
+        if (sortMode != previousSortMode) {
+            previousSortMode = sortMode
+            listState.animateScrollToItem(0)
+        }
+    }
 
     // ── Import file picker ──
     val importLauncher = rememberLauncherForActivityResult(
@@ -683,6 +728,7 @@ fun LibraryScreen(
     val context = viewModel.getApplication<Application>() as Context
 
     var showingTrash by remember { mutableStateOf(false) }
+    var isSearchExpanded by remember { mutableStateOf(false) }
     var showGroupDialog by remember { mutableStateOf(false) }
     var showEmptyTrashDialog by remember { mutableStateOf(false) }
     var showMoveToGroupSheet by remember { mutableStateOf(false) }
@@ -757,6 +803,7 @@ fun LibraryScreen(
             SortMode.DATE_ASC -> base.sortedBy { it.createdAt }
             SortMode.TITLE_AZ -> base.sortedBy { it.title.lowercase() }
             SortMode.TITLE_ZA -> base.sortedByDescending { it.title.lowercase() }
+            SortMode.RECENT -> base.sortedByDescending { it.lastOpenedAt ?: 0L }
         }
     }
 
@@ -981,29 +1028,64 @@ fun LibraryScreen(
             if (selectedIds.isNotEmpty()) {
                 // Selection mode top bar
                 TopAppBar(
-                    title = { Text("${selectedIds.size} selected") },
+                    title = {
+                        Text(
+                            text = "${selectedIds.size} selected",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = { viewModel.clearSelection() }) {
                             Icon(Icons.Filled.Close, contentDescription = "Cancel")
                         }
                     },
                     actions = {
-                        IconButton(onClick = { viewModel.selectAll(filteredIdeas) }) {
-                            Icon(Icons.Filled.SelectAll, contentDescription = "Select All")
+                        IconButton(onClick = { viewModel.selectAll(filteredIdeas) }, modifier = Modifier.size(52.dp)) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Filled.SelectAll, contentDescription = "Select All", modifier = Modifier.size(20.dp))
+                                Text("All", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                            }
                         }
-                        IconButton(onClick = { showGroupDialog = true }) {
-                            Icon(Icons.Filled.CreateNewFolder, contentDescription = "New Group")
+                        IconButton(onClick = { isSearchExpanded = !isSearchExpanded }, modifier = Modifier.size(52.dp)) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (isSearchExpanded) MaterialTheme.colorScheme.secondaryContainer
+                                        else Color.Transparent
+                                    )
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                Icon(Icons.Filled.Search, contentDescription = "Search", modifier = Modifier.size(20.dp))
+                                Text("Search", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                            }
+                        }
+                        IconButton(onClick = { showGroupDialog = true }, modifier = Modifier.size(52.dp)) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Filled.CreateNewFolder, contentDescription = "New Group", modifier = Modifier.size(20.dp))
+                                Text("Group", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                            }
                         }
                         if (availableGroups.isNotEmpty()) {
                             IconButton(onClick = {
                                 moveToGroupTargetId = null
                                 showMoveToGroupSheet = true
-                            }) {
-                                Icon(Icons.Filled.DriveFileMove, contentDescription = "Move to Group")
+                            }, modifier = Modifier.size(52.dp)) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Filled.DriveFileMove, contentDescription = "Move to Group", modifier = Modifier.size(20.dp))
+                                    Text("Move", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                                }
                             }
                         }
-                        IconButton(onClick = { viewModel.softDeleteSelected() }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete Selected")
+                        IconButton(onClick = { viewModel.softDeleteSelected() }, modifier = Modifier.size(52.dp)) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete Selected", modifier = Modifier.size(20.dp))
+                                Text("Trash", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                            }
                         }
                     }
                 )
@@ -1019,6 +1101,21 @@ fun LibraryScreen(
                     },
                     actions = {
                         if (!showingTrash) {
+                            IconButton(onClick = { isSearchExpanded = !isSearchExpanded }, modifier = Modifier.size(52.dp)) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (isSearchExpanded) MaterialTheme.colorScheme.secondaryContainer
+                                            else Color.Transparent
+                                        )
+                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(Icons.Filled.Search, contentDescription = "Search", modifier = Modifier.size(20.dp))
+                                    Text("Search", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                                }
+                            }
                             IconButton(onClick = { showBuildDialog = true }) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Icon(Icons.Filled.Construction, contentDescription = "Build", modifier = Modifier.size(20.dp))
@@ -1110,39 +1207,73 @@ fun LibraryScreen(
                 }
             } else {
                 // ── Active library ──
-                if (selectedIds.isEmpty()) {
-                    // Search bar
+                // Sort chips with direction toggles + recent.
+                Row(
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val isDateSort = sortMode == SortMode.DATE_DESC || sortMode == SortMode.DATE_ASC
+                    val dateLabel = if (sortMode == SortMode.DATE_ASC) "Oldest" else "Newest"
+                    FilterChip(
+                        selected = isDateSort,
+                        onClick = {
+                            viewModel.setSortMode(
+                                if (sortMode == SortMode.DATE_DESC) SortMode.DATE_ASC else SortMode.DATE_DESC
+                            )
+                        },
+                        label = { Text(dateLabel) },
+                        leadingIcon = if (isDateSort) {
+                            { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+                        } else null
+                    )
+
+                    val isTitleSort = sortMode == SortMode.TITLE_AZ || sortMode == SortMode.TITLE_ZA
+                    val titleLabel = if (sortMode == SortMode.TITLE_ZA) "Z → A" else "A → Z"
+                    FilterChip(
+                        selected = isTitleSort,
+                        onClick = {
+                            viewModel.setSortMode(
+                                if (sortMode == SortMode.TITLE_AZ) SortMode.TITLE_ZA else SortMode.TITLE_AZ
+                            )
+                        },
+                        label = { Text(titleLabel) },
+                        leadingIcon = if (isTitleSort) {
+                            { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+                        } else null
+                    )
+
+                    FilterChip(
+                        selected = sortMode == SortMode.RECENT,
+                        onClick = { viewModel.setSortMode(SortMode.RECENT) },
+                        label = { Text("Recent") },
+                        leadingIcon = if (sortMode == SortMode.RECENT) {
+                            { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+                        } else null
+                    )
+                }
+                if (isSearchExpanded) {
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { viewModel.setSearchQuery(it) },
                         placeholder = { Text("Search ideas or folders...") },
                         leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                viewModel.setSearchQuery("")
+                                isSearchExpanded = false
+                            }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Close search")
+                            }
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         singleLine = true
                     )
-
-                    // Sort chips
-                    Row(
-                        modifier = Modifier
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        SortMode.entries.forEach { mode ->
-                            FilterChip(
-                                selected = sortMode == mode,
-                                onClick = { viewModel.setSortMode(mode) },
-                                label = { Text(mode.label) },
-                                leadingIcon = if (sortMode == mode) {
-                                    { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
-                                } else null
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
                 }
+                Spacer(modifier = Modifier.height(4.dp))
 
                 if (filteredIdeas.isEmpty()) {
                     EmptyState(
@@ -1151,95 +1282,195 @@ fun LibraryScreen(
                         subtitle = if (searchQuery.isBlank()) "Record your first melody!" else null
                     )
                 } else {
+                    var isDragSelecting by remember { mutableStateOf(false) }
+                    var currentDragY by remember { mutableStateOf(0f) }
+                    val dragVisited = remember { mutableSetOf<Long>() }
+
+                    // Auto-scroll while drag-selecting near list edges.
+                    LaunchedEffect(isDragSelecting) {
+                        if (!isDragSelecting) return@LaunchedEffect
+                        val edgeZone = 120f
+                        while (isDragSelecting) {
+                            val y = currentDragY
+                            val viewportHeight = listState.layoutInfo.viewportSize.height.toFloat()
+                            val scrollAmount = when {
+                                y < edgeZone -> -(edgeZone - y) / edgeZone * 25f
+                                y > viewportHeight - edgeZone -> (y - viewportHeight + edgeZone) / edgeZone * 25f
+                                else -> 0f
+                            }
+                            if (scrollAmount != 0f) {
+                                listState.scrollBy(scrollAmount)
+                                val hitKey = listState.layoutInfo.visibleItemsInfo
+                                    .firstOrNull { y >= it.offset && y < it.offset + it.size }
+                                    ?.key as? Long
+                                if (hitKey != null && dragVisited.add(hitKey)) {
+                                    viewModel.addToSelection(hitKey)
+                                }
+                            }
+                            delay(16)
+                        }
+                    }
+
                     LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        state = listState,
+                        userScrollEnabled = !isDragSelecting,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = { offset ->
+                                        isDragSelecting = true
+                                        currentDragY = offset.y
+                                        dragVisited.clear()
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+
+                                        val hitKey = listState.layoutInfo.visibleItemsInfo
+                                            .firstOrNull { offset.y >= it.offset && offset.y < it.offset + it.size }
+                                            ?.key as? Long
+                                        if (hitKey != null && dragVisited.add(hitKey)) {
+                                            viewModel.addToSelection(hitKey)
+                                        }
+                                    },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        currentDragY = change.position.y
+                                        val hitKey = listState.layoutInfo.visibleItemsInfo
+                                            .firstOrNull { currentDragY >= it.offset && currentDragY < it.offset + it.size }
+                                            ?.key as? Long
+                                        if (hitKey != null && dragVisited.add(hitKey)) {
+                                            viewModel.addToSelection(hitKey)
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        isDragSelecting = false
+                                        dragVisited.clear()
+                                    },
+                                    onDragCancel = {
+                                        isDragSelecting = false
+                                        dragVisited.clear()
+                                    }
+                                )
+                            },
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Grouped ideas
-                        grouped.forEach { (groupId, groupIdeas) ->
-                            val groupName = groupIdeas.firstOrNull()?.groupName ?: "Group"
-                            val isExpanded = groupId !in collapsedGroups
-                            val gColor = groupColor(groupId, colorOverrides)
-
-                            item(key = "group_header_$groupId") {
-                                GroupHeader(
-                                    name = groupName,
-                                    count = groupIdeas.size,
-                                    isExpanded = isExpanded,
-                                    accentColor = gColor,
-                                    onToggleExpand = { viewModel.toggleGroupExpanded(groupId) },
-                                    onUngroup = { viewModel.ungroupIdeas(groupId, groupIdeas) },
-                                    onRename = { newName -> viewModel.renameGroup(groupId, newName, groupIdeas) },
-                                    onRecolor = { color -> viewModel.setGroupColor(groupId, color) }
+                        if (sortMode == SortMode.RECENT) {
+                            // Flat recent list across groups.
+                            items(filteredIdeas, key = { it.id }) { idea ->
+                                IdeaCard(
+                                    idea = idea,
+                                    isSelected = idea.id in selectedIds,
+                                    isSelecting = selectedIds.isNotEmpty(),
+                                    accentColor = idea.groupId?.let { groupColor(it, colorOverrides) },
+                                    edgeLabel = compactGroupEdgeLabel(
+                                        idea.groupName?.takeIf { it.isNotBlank() } ?: "Ungrouped"
+                                    ),
+                                    availableGroups = availableGroups,
+                                    onClick = {
+                                        if (selectedIds.isNotEmpty()) {
+                                            viewModel.toggleSelection(idea.id)
+                                        } else {
+                                            viewModel.updateLastOpenedAt(idea.id)
+                                            onNavigateToPreview(idea.id)
+                                        }
+                                    },
+                                    onDelete = { viewModel.softDeleteIdea(idea) },
+                                    onRename = { newTitle -> viewModel.renameIdea(idea.id, newTitle) },
+                                    onDuplicate = { viewModel.duplicateIdea(idea) },
+                                    onEditFiles = { editFilesTargetId = idea.id },
+                                    onRemoveFromGroup = if (idea.groupId != null) ({ viewModel.removeFromGroup(idea.id) }) else null,
+                                    onMoveToGroup = {
+                                        moveToGroupTargetId = idea.id
+                                        showMoveToGroupSheet = true
+                                    }
                                 )
                             }
-                            if (isExpanded) {
-                                items(groupIdeas, key = { it.id }) { idea ->
-                                    IdeaCard(
-                                        idea = idea,
-                                        isSelected = idea.id in selectedIds,
-                                        isSelecting = selectedIds.isNotEmpty(),
+                        } else {
+                            // Grouped ideas
+                            grouped.forEach { (groupId, groupIdeas) ->
+                                val groupName = groupIdeas.firstOrNull()?.groupName ?: "Group"
+                                val isExpanded = groupId !in collapsedGroups
+                                val gColor = groupColor(groupId, colorOverrides)
+
+                                item(key = "group_header_$groupId") {
+                                    GroupHeader(
+                                        name = groupName,
+                                        count = groupIdeas.size,
+                                        isExpanded = isExpanded,
                                         accentColor = gColor,
-                                        availableGroups = availableGroups,
-                                        onClick = {
-                                            if (selectedIds.isNotEmpty()) viewModel.toggleSelection(idea.id)
-                                            else onNavigateToPreview(idea.id)
-                                        },
-                                        onLongClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            viewModel.toggleSelection(idea.id)
-                                        },
-                                        onDelete = { viewModel.softDeleteIdea(idea) },
-                                        onRename = { newTitle -> viewModel.renameIdea(idea.id, newTitle) },
-                                        onDuplicate = { viewModel.duplicateIdea(idea) },
-                                        onEditFiles = { editFilesTargetId = idea.id },
-                                        onRemoveFromGroup = { viewModel.removeFromGroup(idea.id) },
-                                        onMoveToGroup = {
-                                            moveToGroupTargetId = idea.id
-                                            showMoveToGroupSheet = true
-                                        }
+                                        onToggleExpand = { viewModel.toggleGroupExpanded(groupId) },
+                                        onUngroup = { viewModel.ungroupIdeas(groupId, groupIdeas) },
+                                        onRename = { newName -> viewModel.renameGroup(groupId, newName, groupIdeas) },
+                                        onRecolor = { color -> viewModel.setGroupColor(groupId, color) }
+                                    )
+                                }
+                                if (isExpanded) {
+                                    items(groupIdeas, key = { it.id }) { idea ->
+                                        IdeaCard(
+                                            idea = idea,
+                                            isSelected = idea.id in selectedIds,
+                                            isSelecting = selectedIds.isNotEmpty(),
+                                            accentColor = gColor,
+                                            availableGroups = availableGroups,
+                                            onClick = {
+                                                if (selectedIds.isNotEmpty()) {
+                                                    viewModel.toggleSelection(idea.id)
+                                                } else {
+                                                    viewModel.updateLastOpenedAt(idea.id)
+                                                    onNavigateToPreview(idea.id)
+                                                }
+                                            },
+                                            onDelete = { viewModel.softDeleteIdea(idea) },
+                                            onRename = { newTitle -> viewModel.renameIdea(idea.id, newTitle) },
+                                            onDuplicate = { viewModel.duplicateIdea(idea) },
+                                            onEditFiles = { editFilesTargetId = idea.id },
+                                            onRemoveFromGroup = { viewModel.removeFromGroup(idea.id) },
+                                            onMoveToGroup = {
+                                                moveToGroupTargetId = idea.id
+                                                showMoveToGroupSheet = true
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Ungrouped ideas
+                            if (ungrouped.isNotEmpty() && grouped.isNotEmpty()) {
+                                item(key = "ungrouped_header") {
+                                    Text(
+                                        "Ungrouped",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                                     )
                                 }
                             }
-                        }
-
-                        // Ungrouped ideas
-                        if (ungrouped.isNotEmpty() && grouped.isNotEmpty()) {
-                            item(key = "ungrouped_header") {
-                                Text(
-                                    "Ungrouped",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                            items(ungrouped, key = { it.id }) { idea ->
+                                IdeaCard(
+                                    idea = idea,
+                                    isSelected = idea.id in selectedIds,
+                                    isSelecting = selectedIds.isNotEmpty(),
+                                    accentColor = null,
+                                    availableGroups = availableGroups,
+                                    onClick = {
+                                        if (selectedIds.isNotEmpty()) {
+                                            viewModel.toggleSelection(idea.id)
+                                        } else {
+                                            viewModel.updateLastOpenedAt(idea.id)
+                                            onNavigateToPreview(idea.id)
+                                        }
+                                    },
+                                    onDelete = { viewModel.softDeleteIdea(idea) },
+                                    onRename = { newTitle -> viewModel.renameIdea(idea.id, newTitle) },
+                                    onDuplicate = { viewModel.duplicateIdea(idea) },
+                                    onEditFiles = { editFilesTargetId = idea.id },
+                                    onRemoveFromGroup = null,
+                                    onMoveToGroup = {
+                                        moveToGroupTargetId = idea.id
+                                        showMoveToGroupSheet = true
+                                    }
                                 )
                             }
-                        }
-                        items(ungrouped, key = { it.id }) { idea ->
-                            IdeaCard(
-                                idea = idea,
-                                isSelected = idea.id in selectedIds,
-                                isSelecting = selectedIds.isNotEmpty(),
-                                accentColor = null,
-                                availableGroups = availableGroups,
-                                onClick = {
-                                    if (selectedIds.isNotEmpty()) viewModel.toggleSelection(idea.id)
-                                    else onNavigateToPreview(idea.id)
-                                },
-                                onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.toggleSelection(idea.id)
-                                },
-                                onDelete = { viewModel.softDeleteIdea(idea) },
-                                onRename = { newTitle -> viewModel.renameIdea(idea.id, newTitle) },
-                                onDuplicate = { viewModel.duplicateIdea(idea) },
-                                onEditFiles = { editFilesTargetId = idea.id },
-                                onRemoveFromGroup = null,
-                                onMoveToGroup = {
-                                    moveToGroupTargetId = idea.id
-                                    showMoveToGroupSheet = true
-                                }
-                            )
                         }
                     }
                 }
@@ -1381,9 +1612,9 @@ private fun IdeaCard(
     isSelected: Boolean,
     isSelecting: Boolean,
     accentColor: Color?,
+    edgeLabel: String? = null,
     availableGroups: Map<String, String>,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
     onDelete: () -> Unit,
     onRename: (String) -> Unit,
     onDuplicate: () -> Unit,
@@ -1436,10 +1667,7 @@ private fun IdeaCard(
                     }
                 } else Modifier
             )
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            ),
+            .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = when {
                 isSelected -> MaterialTheme.colorScheme.primaryContainer
@@ -1456,100 +1684,138 @@ private fun IdeaCard(
     ) {
         Row(
             modifier = Modifier
-                .padding(12.dp)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (isSelecting) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onClick() },
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-            } else {
-                Icon(
-                    Icons.Filled.MusicNote,
-                    contentDescription = null,
-                    tint = accentColor ?: MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(36.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
+            if (!edgeLabel.isNullOrBlank() && accentColor != null) {
+                Box(
+                    modifier = Modifier
+                        .width(16.dp)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(accentColor.copy(alpha = 0.80f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = edgeLabel,
+                        color = Color.White,
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .wrapContentSize(unbounded = true)
+                            .graphicsLayer {
+                                transformOrigin = TransformOrigin(0.5f, 0.5f)
+                                rotationZ = -90f
+                                clip = false
+                            }
+                    )
+                }
             }
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = idea.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = buildString {
-                        append(idea.keySignature ?: "")
-                        if (idea.timeSignature != null) {
-                            if (isNotEmpty()) append(" \u2022 ")
-                            append(idea.timeSignature)
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (!edgeLabel.isNullOrBlank() && accentColor != null) {
+                    Spacer(modifier = Modifier.width(10.dp))
+                }
+
+                if (isSelecting) {
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = { onClick() },
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                } else {
+                    Icon(
+                        Icons.Filled.MusicNote,
+                        contentDescription = null,
+                        tint = accentColor ?: MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = idea.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = buildString {
+                            append(idea.keySignature ?: "")
+                            if (idea.timeSignature != null) {
+                                if (isNotEmpty()) append(" \u2022 ")
+                                append(idea.timeSignature)
+                            }
+                            append(" \u2022 ${idea.tempoBpm} BPM")
+                            append(" \u2022 ${idea.instrument}")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = formatDate(idea.createdAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (!isSelecting) {
+                    Box {
+                        IconButton(onClick = { showItemMenu = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "Options")
                         }
-                        append(" \u2022 ${idea.tempoBpm} BPM")
-                        append(" \u2022 ${idea.instrument}")
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = formatDate(idea.createdAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (!isSelecting) {
-                Box {
-                    IconButton(onClick = { showItemMenu = true }) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "Options")
-                    }
-                    DropdownMenu(
-                        expanded = showItemMenu,
-                        onDismissRequest = { showItemMenu = false }
-                    ) {
-                        // Group actions
-                        DropdownMenuItem(
-                            text = { Text("Move to Group...") },
-                            onClick = { showItemMenu = false; onMoveToGroup() },
-                            leadingIcon = { Icon(Icons.Filled.DriveFileMove, null) }
-                        )
-                        if (onRemoveFromGroup != null) {
+                        DropdownMenu(
+                            expanded = showItemMenu,
+                            onDismissRequest = { showItemMenu = false }
+                        ) {
+                            // Group actions
                             DropdownMenuItem(
-                                text = { Text("Remove from Group") },
-                                onClick = { showItemMenu = false; onRemoveFromGroup() },
-                                leadingIcon = { Icon(Icons.Filled.FolderOff, null) }
+                                text = { Text("Move to Group...") },
+                                onClick = { showItemMenu = false; onMoveToGroup() },
+                                leadingIcon = { Icon(Icons.Filled.DriveFileMove, null) }
+                            )
+                            if (onRemoveFromGroup != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Remove from Group") },
+                                    onClick = { showItemMenu = false; onRemoveFromGroup() },
+                                    leadingIcon = { Icon(Icons.Filled.FolderOff, null) }
+                                )
+                            }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            // Item actions
+                            DropdownMenuItem(
+                                text = { Text("Rename") },
+                                onClick = { showItemMenu = false; showRenameDialog = true },
+                                leadingIcon = { Icon(Icons.Filled.Edit, null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Duplicate") },
+                                onClick = { showItemMenu = false; onDuplicate() },
+                                leadingIcon = { Icon(Icons.Filled.ContentCopy, null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Edit Files\u2026") },
+                                onClick = { showItemMenu = false; onEditFiles() },
+                                leadingIcon = { Icon(Icons.Filled.UploadFile, null) }
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            // Destructive
+                            DropdownMenuItem(
+                                text = { Text("Move to Trash") },
+                                onClick = { showItemMenu = false; showDeleteDialog = true },
+                                leadingIcon = { Icon(Icons.Filled.Delete, null) }
                             )
                         }
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                        // Item actions
-                        DropdownMenuItem(
-                            text = { Text("Rename") },
-                            onClick = { showItemMenu = false; showRenameDialog = true },
-                            leadingIcon = { Icon(Icons.Filled.Edit, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Duplicate") },
-                            onClick = { showItemMenu = false; onDuplicate() },
-                            leadingIcon = { Icon(Icons.Filled.ContentCopy, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Edit Files\u2026") },
-                            onClick = { showItemMenu = false; onEditFiles() },
-                            leadingIcon = { Icon(Icons.Filled.UploadFile, null) }
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                        // Destructive
-                        DropdownMenuItem(
-                            text = { Text("Move to Trash") },
-                            onClick = { showItemMenu = false; showDeleteDialog = true },
-                            leadingIcon = { Icon(Icons.Filled.Delete, null) }
-                        )
                     }
                 }
             }

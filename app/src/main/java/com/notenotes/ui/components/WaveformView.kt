@@ -19,6 +19,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -96,7 +97,7 @@ data class NoteOverlayItem(
  *
  * Shows only a configurable time window of the audio (default 5s).
  * Tap to place edit cursor for precise note placement.
- * No drag-to-seek on waveform — use transport bar instead.
+ * Optional move mode lets users drag the selected note to a new start time.
  */
 @Composable
 fun WaveformView(
@@ -111,8 +112,11 @@ fun WaveformView(
     editCursorFraction: Float? = null,
     onNoteSelected: ((Int?) -> Unit)? = null,
     onEditCursorSet: ((Float?) -> Unit)? = null,
+    onEditIntent: ((Int?, Float?, Float?) -> Unit)? = null,
     windowStartFraction: Float = 0f,
-    windowSizeSec: Float = 5f
+    windowSizeSec: Float = 5f,
+    isMoveMode: Boolean = false,
+    onMoveSelectedNote: ((Int, Float) -> Unit)? = null
 ) {
     if (waveformData == null || waveformData.peaks.isEmpty()) {
         Box(
@@ -162,11 +166,23 @@ fun WaveformView(
 
     val context = LocalContext.current
 
+    fun dispatchEditIntent(noteIndex: Int?, cursorFraction: Float?, seekFraction: Float?) {
+        val intent = onEditIntent
+        if (intent != null) {
+            intent(noteIndex, cursorFraction, seekFraction)
+            return
+        }
+
+        onNoteSelected?.invoke(noteIndex)
+        onEditCursorSet?.invoke(cursorFraction)
+        if (seekFraction != null) onSeek(seekFraction)
+    }
+
     Canvas(
         modifier = modifier
             .fillMaxSize()
             .background(bgColor)
-            .pointerInput(noteOverlays, windowStartFraction, windowFractionSize) {
+            .pointerInput(noteOverlays, windowStartFraction, windowFractionSize, selectedNoteIndex, isMoveMode) {
                 val longPressTimeoutMs = viewConfiguration.longPressTimeoutMillis
                 awaitEachGesture {
                     val down = awaitFirstDown()
@@ -195,8 +211,7 @@ fun WaveformView(
                                 globalFrac >= overlay.startFraction && globalFrac <= overlay.endFraction
                             }
                             if (tappedNote != null) {
-                                onNoteSelected?.invoke(tappedNote.noteIndex)
-                                onEditCursorSet?.invoke(null)
+                                dispatchEditIntent(tappedNote.noteIndex, null, null)
                                 try {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                                         val vibratorManager = context.getSystemService(android.content.Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
@@ -212,34 +227,50 @@ fun WaveformView(
                                     }
                                 } catch (_: Exception) {}
                             } else {
-                                onNoteSelected?.invoke(null)
-                                onEditCursorSet?.invoke(globalFrac)
-                                onSeek(globalFrac)
+                                dispatchEditIntent(null, globalFrac, globalFrac)
                             }
                         }
                         dragPointerChange != null -> {
-                            // Drag detected — scrub
+                            // Drag detected
                             val change = dragPointerChange!!
-                            val localFrac = (change.position.x / size.width).coerceIn(0f, 1f)
-                            val globalFrac = windowStartFraction + localFrac * windowFractionSize
-                            onNoteSelected?.invoke(null)
-                            onEditCursorSet?.invoke(globalFrac)
-                            onSeek(globalFrac)
-                            horizontalDrag(change.id) { dragChange ->
-                                dragChange.consume()
-                                val lf = (dragChange.position.x / size.width).coerceIn(0f, 1f)
-                                val gf = windowStartFraction + lf * windowFractionSize
-                                onEditCursorSet?.invoke(gf)
-                                onSeek(gf)
+                            if (isMoveMode && selectedNoteIndex != null && onMoveSelectedNote != null) {
+                                val selectedOverlay = noteOverlays.find { it.noteIndex == selectedNoteIndex }
+                                if (selectedOverlay != null) {
+                                    val downLocalFrac = (downX / size.width).coerceIn(0f, 1f)
+                                    val downGlobalFrac = windowStartFraction + downLocalFrac * windowFractionSize
+                                    val grabOffset = downGlobalFrac - selectedOverlay.startFraction
+
+                                    fun moveToPointerX(x: Float) {
+                                        val localFrac = (x / size.width).coerceIn(0f, 1f)
+                                        val globalFrac = windowStartFraction + localFrac * windowFractionSize
+                                        val targetStart = (globalFrac - grabOffset).coerceIn(0f, 1f)
+                                        onMoveSelectedNote(selectedNoteIndex, targetStart)
+                                        onEditCursorSet?.invoke(null)
+                                    }
+
+                                    moveToPointerX(change.position.x)
+                                    horizontalDrag(change.id) { dragChange ->
+                                        dragChange.consume()
+                                        moveToPointerX(dragChange.position.x)
+                                    }
+                                }
+                            } else {
+                                val localFrac = (change.position.x / size.width).coerceIn(0f, 1f)
+                                val globalFrac = windowStartFraction + localFrac * windowFractionSize
+                                dispatchEditIntent(null, globalFrac, globalFrac)
+                                horizontalDrag(change.id) { dragChange ->
+                                    dragChange.consume()
+                                    val lf = (dragChange.position.x / size.width).coerceIn(0f, 1f)
+                                    val gf = windowStartFraction + lf * windowFractionSize
+                                    dispatchEditIntent(null, gf, gf)
+                                }
                             }
                         }
                         else -> {
                             // Short tap
                             val localFrac = (downX / size.width).coerceIn(0f, 1f)
                             val globalFrac = windowStartFraction + localFrac * windowFractionSize
-                            onNoteSelected?.invoke(null)
-                            onEditCursorSet?.invoke(globalFrac)
-                            onSeek(globalFrac)
+                            dispatchEditIntent(null, globalFrac, globalFrac)
                         }
                     }
                 }
@@ -251,6 +282,7 @@ fun WaveformView(
         val waveBottom = h - 40f  // more room for note labels + tab info
         val waveHeight = waveBottom - waveTop
         val waveMid = waveTop + waveHeight / 2f
+        val moveModeBorderEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
 
         // Draw waveform (only the sub-range visible in the window)
         drawWindowedWaveform(waveformData, w, waveTop, waveBottom, waveColor, waveBgColor,
@@ -266,10 +298,11 @@ fun WaveformView(
             val x2 = ((overlay.endFraction - windowStartFraction) / windowFractionSize * w).coerceAtMost(w)
             val noteWidth = (x2 - x1).coerceAtLeast(2f)
             val isSelected = overlay.noteIndex == selectedNoteIndex
+            val isMoveSelected = isSelected && isMoveMode
 
             // Note region highlight
             drawRect(
-                color = if (isSelected) selectedNoteColor else noteBoxColor,
+                color = if (isMoveSelected) Color.Transparent else if (isSelected) selectedNoteColor else noteBoxColor,
                 topLeft = Offset(x1, waveTop),
                 size = Size(noteWidth, waveHeight)
             )
@@ -279,7 +312,11 @@ fun WaveformView(
                 color = if (isSelected) selectedNoteBorder else noteBorderColor,
                 topLeft = Offset(x1, waveTop),
                 size = Size(noteWidth, waveHeight),
-                style = Stroke(width = if (isSelected) 2.5f else 1f)
+                style = if (isMoveSelected) {
+                    Stroke(width = 3f, pathEffect = moveModeBorderEffect)
+                } else {
+                    Stroke(width = if (isSelected) 2.5f else 1f)
+                }
             )
 
             // Note label at bottom
@@ -474,13 +511,12 @@ private fun computeNoteOverlays(
         val startFraction = (noteStartSec / durationSec).coerceIn(0f, 1f)
         val endFraction = ((noteStartSec + noteDurationSec) / durationSec).coerceIn(0f, 1f)
 
-        val label = if (note.chordName != null) {
-            note.chordName!!
+        val label = if (note.isChord) {
+            note.allPitches.joinToString(" ") { pitch -> PitchUtils.midiToNoteName(pitch) }
         } else {
             PitchUtils.midiToNoteName(note.midiPitch)
         }
 
-        val stringNames = arrayOf("E2", "A2", "D3", "G3", "B3", "E4")
         val tabLabel = if (note.hasTab) {
             "S${(note.guitarString ?: 0) + 1} F${note.guitarFret ?: 0}"
         } else null

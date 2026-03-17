@@ -2,6 +2,7 @@ package com.notenotes.ui.screens
 
 import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -14,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -29,6 +31,8 @@ import com.notenotes.processing.PitchAlgorithm
 import com.notenotes.model.KeySignature
 import com.notenotes.model.TimeSignature
 import com.notenotes.model.InstrumentProfile
+import com.notenotes.util.GuitarUtils
+import kotlinx.coroutines.launch
 
 private const val PREFS_NAME = "notenotes_display"
 private const val KEY_BARS_PER_ROW = "bars_per_row"
@@ -52,6 +56,7 @@ fun PreviewScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val waveformData by viewModel.waveformData.collectAsState()
     val audioDurationMs by viewModel.audioDurationMs.collectAsState()
+    val leadingRestOffset by viewModel.leadingRestBeatCount.collectAsState()
 
     val isRetranscribing by viewModel.isRetranscribing.collectAsState()
     val selectedNoteIndex by viewModel.selectedNoteIndex.collectAsState()
@@ -75,6 +80,11 @@ fun PreviewScreen(
     var sheetWebView by remember { mutableStateOf<android.webkit.WebView?>(null) }
     // PDF print pending state: when true, we're waiting for alphaTab to re-render at print width
     var printPending by remember { mutableStateOf(false) }
+    var isMoveMode by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedNoteIndex) {
+        if (selectedNoteIndex == null) isMoveMode = false
+    }
 
     // Persist window size from prefs on first load
     LaunchedEffect(Unit) {
@@ -88,6 +98,124 @@ fun PreviewScreen(
     var showTimeDialog by remember { mutableStateOf(false) }
     var showBpmDialog by remember { mutableStateOf(false) }
     var showInstrumentDialog by remember { mutableStateOf(false) }
+    var waveformEditorHasPendingChanges by remember { mutableStateOf(false) }
+    var showWaveformDiscardDialog by remember { mutableStateOf(false) }
+    var pendingWaveformIntent by remember { mutableStateOf<Triple<Int?, Float?, Float?>?>(null) }
+    var pendingTabSelection by remember { mutableStateOf<Int?>(null) }
+    var pendingPostDiscardAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val interactionScope = rememberCoroutineScope()
+
+    fun queueWaveformDiscard(
+        waveformIntent: Triple<Int?, Float?, Float?>?,
+        tabSelection: Int?,
+        postDiscardAction: (() -> Unit)? = null
+    ) {
+        pendingWaveformIntent = waveformIntent
+        pendingTabSelection = tabSelection
+        pendingPostDiscardAction = postDiscardAction
+        showWaveformDiscardDialog = true
+    }
+
+    fun hasUnconfirmedWaveformEdits(): Boolean {
+        return selectedNoteIndex != null && waveformEditorHasPendingChanges
+    }
+
+    fun runGuardedAction(action: () -> Unit) {
+        if (hasUnconfirmedWaveformEdits()) {
+            queueWaveformDiscard(Triple(null, null, null), null, action)
+            return
+        }
+
+        if (selectedNoteIndex != null) {
+            interactionScope.launch {
+                withFrameNanos { }
+                if (hasUnconfirmedWaveformEdits()) {
+                    queueWaveformDiscard(Triple(null, null, null), null, action)
+                } else {
+                    action()
+                }
+            }
+            return
+        }
+
+        action()
+    }
+
+    fun applyWaveformIntent(intent: Triple<Int?, Float?, Float?>) {
+        val noteIndex = intent.first
+        val cursorFraction = intent.second
+        val seekFraction = intent.third
+
+        if (noteIndex != null) {
+            viewModel.selectNote(noteIndex)
+        } else {
+            viewModel.selectNote(null)
+            if (cursorFraction != null) {
+                viewModel.setEditCursor(cursorFraction)
+            }
+        }
+
+        if (seekFraction != null) {
+            viewModel.seekAudioOnly(seekFraction)
+        }
+    }
+
+    fun requestWaveformIntent(noteIndex: Int?, cursorFraction: Float?, seekFraction: Float?) {
+        val requestedIntent = Triple(noteIndex, cursorFraction, seekFraction)
+        val isSwitchingAwayFromSelected = selectedNoteIndex != null &&
+            (noteIndex != selectedNoteIndex || cursorFraction != null)
+
+        if (!isSwitchingAwayFromSelected) {
+            applyWaveformIntent(requestedIntent)
+            return
+        }
+
+        if (waveformEditorHasPendingChanges) {
+            queueWaveformDiscard(requestedIntent, null)
+            return
+        }
+
+        // Give the editor one frame to propagate pending state before applying an edit-exit intent.
+        interactionScope.launch {
+            withFrameNanos { }
+            val stillSwitchingAway = selectedNoteIndex != null &&
+                (noteIndex != selectedNoteIndex || cursorFraction != null)
+            if (stillSwitchingAway && waveformEditorHasPendingChanges) {
+                queueWaveformDiscard(requestedIntent, null)
+            } else {
+                applyWaveformIntent(requestedIntent)
+            }
+        }
+    }
+
+    fun requestTabChange(tabIndex: Int) {
+        if (tabIndex == selectedTab) return
+
+        val leavingWaveformEditContext =
+            selectedTab == 2 && tabIndex != 2 && selectedNoteIndex != null
+
+        if (!leavingWaveformEditContext) {
+            viewModel.setSelectedTab(tabIndex)
+            return
+        }
+
+        if (waveformEditorHasPendingChanges) {
+            queueWaveformDiscard(Triple(null, null, null), tabIndex)
+            return
+        }
+
+        // Re-check on next frame to avoid missing very recent edits before tab switch.
+        interactionScope.launch {
+            withFrameNanos { }
+            val stillLeavingWaveform =
+                selectedTab == 2 && tabIndex != 2 && selectedNoteIndex != null
+            if (stillLeavingWaveform && waveformEditorHasPendingChanges) {
+                queueWaveformDiscard(Triple(null, null, null), tabIndex)
+            } else {
+                viewModel.setSelectedTab(tabIndex)
+            }
+        }
+    }
 
     // Back button: dismiss dialogs/editor/selection before navigating back
     BackHandler(
@@ -101,7 +229,13 @@ fun PreviewScreen(
             showBpmDialog -> showBpmDialog = false
             showInstrumentDialog -> showInstrumentDialog = false
             isRenameDialogOpen -> viewModel.closeRenameDialog()
-            selectedNoteIndex != null -> viewModel.selectNote(null)
+            selectedNoteIndex != null -> {
+                if (waveformEditorHasPendingChanges) {
+                    queueWaveformDiscard(Triple(null, null, null), null)
+                } else {
+                    viewModel.selectNote(null)
+                }
+            }
         }
     }
 
@@ -128,6 +262,13 @@ fun PreviewScreen(
                     value = renameText,
                     onValueChange = { renameText = it },
                     label = { Text("Title") },
+                    trailingIcon = {
+                        if (renameText.isNotEmpty()) {
+                            IconButton(onClick = { renameText = "" }) {
+                                Icon(Icons.Filled.Clear, contentDescription = "Clear title")
+                            }
+                        }
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -161,6 +302,45 @@ fun PreviewScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showWaveformDiscardDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                pendingWaveformIntent = null
+                pendingTabSelection = null
+                pendingPostDiscardAction = null
+                showWaveformDiscardDialog = false
+            },
+            title = { Text("Discard Changes?") },
+            text = { Text("You have unsaved waveform note edits. Discard them?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val intent = pendingWaveformIntent
+                    val tabSelection = pendingTabSelection
+                    val postDiscardAction = pendingPostDiscardAction
+                    pendingWaveformIntent = null
+                    pendingTabSelection = null
+                    pendingPostDiscardAction = null
+                    showWaveformDiscardDialog = false
+                    if (intent != null) {
+                        applyWaveformIntent(intent)
+                    }
+                    if (tabSelection != null) {
+                        viewModel.setSelectedTab(tabSelection)
+                    }
+                    postDiscardAction?.invoke()
+                }) { Text("Discard") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingWaveformIntent = null
+                    pendingTabSelection = null
+                    pendingPostDiscardAction = null
+                    showWaveformDiscardDialog = false
+                }) { Text("Keep Editing") }
             }
         )
     }
@@ -354,11 +534,11 @@ fun PreviewScreen(
                 title = {
                     Text(
                         text = idea?.title ?: "Preview",
-                        modifier = Modifier.clickable { viewModel.openRenameDialog() }
+                        modifier = Modifier.clickable { runGuardedAction { viewModel.openRenameDialog() } }
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
+                    IconButton(onClick = { runGuardedAction { onNavigateBack() } }) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -367,7 +547,7 @@ fun PreviewScreen(
                     var selectedAlgorithm by remember { mutableStateOf(PitchAlgorithm.DEFAULT) }
 
                     Box {
-                        IconButton(onClick = { showMenu = true }) {
+                        IconButton(onClick = { runGuardedAction { showMenu = true } }) {
                             Icon(Icons.Filled.MoreVert, contentDescription = "Menu")
                         }
                         DropdownMenu(
@@ -666,6 +846,30 @@ fun PreviewScreen(
                                     enabled = idea?.audioFilePath != null
                                 )
                             }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                            // ── Editing ──
+                            Text(
+                                "Editing",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Clear All Notes", color = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    showMenu = false
+                                    showClearDialog = true
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Filled.DeleteSweep,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            )
                         }
                     }
                 }
@@ -691,19 +895,19 @@ fun PreviewScreen(
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(
                     selected = selectedTab == 0,
-                    onClick = { viewModel.setSelectedTab(0) },
+                    onClick = { requestTabChange(0) },
                     text = { Text("Sheet") },
                     icon = { Icon(Icons.Filled.MusicNote, contentDescription = null, modifier = Modifier.size(18.dp)) }
                 )
                 Tab(
                     selected = selectedTab == 1,
-                    onClick = { viewModel.setSelectedTab(1) },
+                    onClick = { requestTabChange(1) },
                     text = { Text("Notes") },
                     icon = { Icon(Icons.Filled.TextFields, contentDescription = null, modifier = Modifier.size(18.dp)) }
                 )
                 Tab(
                     selected = selectedTab == 2,
-                    onClick = { viewModel.setSelectedTab(2) },
+                    onClick = { requestTabChange(2) },
                     text = { Text("Waveform") },
                     icon = { Icon(Icons.Filled.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp)) }
                 )
@@ -711,13 +915,14 @@ fun PreviewScreen(
 
             // Content based on selected tab
             // Always render SheetMusicWebView so PDF export works from any tab
-            val sheetCurrentNoteIndex = remember(playbackProgress, notesList) {
-                viewModel.getCurrentNoteIndex(playbackProgress)
+            val sheetCurrentNoteIndex = remember(playbackProgress, notesList, leadingRestOffset) {
+                viewModel.getCurrentNoteIndex(playbackProgress) + leadingRestOffset
             }
             Box(
                 modifier = Modifier
                     .weight(if (selectedTab == 0) 1f else 0.001f)
                     .fillMaxWidth()
+                    .background(Color.White)
                     .then(if (selectedTab != 0) Modifier.height(0.dp) else Modifier)
             ) {
                 if (musicXml != null) {
@@ -820,29 +1025,36 @@ fun PreviewScreen(
                             playbackProgress = playbackProgress,
                             durationMs = audioDurationMs,
                             tempoBpm = idea?.tempoBpm ?: 120,
-                            onSeek = { fraction -> viewModel.seekAudioOnly(fraction) },
+                            onSeek = { fraction ->
+                                runGuardedAction { viewModel.seekAudioOnly(fraction) }
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f),
                             selectedNoteIndex = selectedNoteIndex,
                             editCursorFraction = editCursorFraction,
-                            onNoteSelected = { idx -> viewModel.selectNote(idx) },
-                            onEditCursorSet = { frac -> viewModel.setEditCursor(frac) },
+                            onEditIntent = { noteIndex, cursorFraction, seekFraction ->
+                                requestWaveformIntent(noteIndex, cursorFraction, seekFraction)
+                            },
                             windowStartFraction = windowStartFraction,
-                            windowSizeSec = windowSizeSec
+                            windowSizeSec = windowSizeSec,
+                            isMoveMode = isMoveMode,
+                            onMoveSelectedNote = { noteIndex, newStartFraction ->
+                                viewModel.moveNoteToFraction(noteIndex, newStartFraction)
+                            }
                         )
 
                         // Always-visible note editor
                         NoteEditorPanel(
                             editCursorActive = editCursorFraction != null,
                             timePointSeconds = (editCursorFraction ?: 0f) * audioDurationMs / 1000f,
+                            tempoBpm = idea?.tempoBpm ?: 120,
                             onAddNote = { editorNotes ->
                                 viewModel.addNote(editorNotes)
                             },
                             onDeleteSelected = if (selectedNoteIndex != null) {
-                                { viewModel.deleteSelectedNote() }
+                                { viewModel.deleteSelectedNote(selectAdjacent = false) }
                             } else null,
-                            onClearAll = { showClearDialog = true },
                             hasSelectedNote = selectedNoteIndex != null,
                             selectedNote = viewModel.selectedNote,
                             selectedNoteIndex = selectedNoteIndex,
@@ -853,6 +1065,40 @@ fun PreviewScreen(
                             },
                             onUpdateChordNote = { index, pitches, stringFrets ->
                                 viewModel.updateChordPitches(index, pitches, stringFrets)
+                            },
+                            allNotes = notesList,
+                            isMoveMode = isMoveMode,
+                            onToggleMoveMode = { isMoveMode = !isMoveMode },
+                            onCopyFromNote = { sourceIndex ->
+                                val source = notesList.getOrNull(sourceIndex) ?: return@NoteEditorPanel
+                                val targetIndex = selectedNoteIndex
+                                if (targetIndex != null) {
+                                    viewModel.copyChordFrom(sourceIndex, targetIndex)
+                                } else {
+                                    val entries = mutableListOf<Pair<Int, Pair<Int, Int>>>()
+                                    val primaryPos = if (source.guitarString != null && source.guitarFret != null) {
+                                        Pair(source.guitarString, source.guitarFret)
+                                    } else {
+                                        GuitarUtils.fromMidi(source.midiPitch)
+                                    } ?: Pair(0, 0)
+                                    entries.add(Pair(source.midiPitch, primaryPos))
+
+                                    source.chordPitches.indices.forEach { idx ->
+                                        val pitch = source.chordPitches[idx]
+                                        val sf = source.safeChordStringFrets.getOrNull(idx)
+                                            ?: GuitarUtils.fromMidi(pitch)
+                                            ?: Pair((idx + 1).coerceAtMost(5), 0)
+                                        entries.add(Pair(pitch, sf))
+                                    }
+
+                                    if (editCursorFraction == null) {
+                                        viewModel.setEditCursor(playbackProgress)
+                                    }
+                                    viewModel.addNote(entries)
+                                }
+                            },
+                            onPendingChangesChanged = { hasPendingChanges ->
+                                waveformEditorHasPendingChanges = hasPendingChanges
                             }
                         )
                     }
@@ -864,21 +1110,21 @@ fun PreviewScreen(
             // Transport controls
             TransportControls(
                 playbackState = playbackState,
-                onPlay = { viewModel.playVoiceMemo() },
-                onPause = { viewModel.pausePlayback() },
-                onResume = { viewModel.resumePlayback() },
-                onStop = { viewModel.stopPlayback() },
+                onPlay = { runGuardedAction { viewModel.playVoiceMemo() } },
+                onPause = { runGuardedAction { viewModel.pausePlayback() } },
+                onResume = { runGuardedAction { viewModel.resumePlayback() } },
+                onStop = { runGuardedAction { viewModel.stopPlayback() } },
                 durationMs = audioDurationMs,
                 currentProgress = playbackProgress,
-                onSeek = { fraction -> viewModel.seekTo(fraction) },
+                onSeek = { fraction -> runGuardedAction { viewModel.seekTo(fraction) } },
                 windowStartFraction = windowStartFraction,
                 windowSizeSec = windowSizeSec,
                 isWindowLocked = isWindowLocked,
-                onWindowBack = { viewModel.moveWindow(-1f) },
-                onWindowForward = { viewModel.moveWindow(1f) },
-                onToggleLock = { viewModel.toggleWindowLock() },
+                onWindowBack = { runGuardedAction { viewModel.moveWindow(-1f) } },
+                onWindowForward = { runGuardedAction { viewModel.moveWindow(1f) } },
+                onToggleLock = { runGuardedAction { viewModel.toggleWindowLock() } },
                 playbackSpeed = playbackSpeed,
-                onSpeedChange = { speed -> viewModel.setPlaybackSpeed(speed) },
+                onSpeedChange = { speed -> runGuardedAction { viewModel.setPlaybackSpeed(speed) } },
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
             )
         }

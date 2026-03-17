@@ -11,6 +11,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import kotlin.math.abs
 
 /**
  * Regression tests for note editing state management.
@@ -288,6 +289,64 @@ class PreviewViewModelEditTest {
         vm.selectNote(0)
         vm.clearAllNotes()
         assertNull(vm.selectedNoteIndex.value)
+        assertNull(vm.editCursorFraction.value)
+    }
+
+    // ── copyChordFrom ───────────────────────────────────────────────────────
+
+    @Test
+    fun copyChordFrom_copiesPitchAndTabPreservingTargetTiming() {
+        val source = MusicalNote(
+            midiPitch = 57,
+            durationTicks = 4,
+            type = "quarter",
+            chordPitches = listOf(60, 64),
+            chordStringFrets = listOf(Pair(4, 1), Pair(5, 0)),
+            guitarString = 3,
+            guitarFret = 2,
+            timePositionMs = 1000f,
+            isManual = true
+        )
+        val target = MusicalNote(
+            midiPitch = 50,
+            durationTicks = 8,
+            type = "half",
+            guitarString = 2,
+            guitarFret = 0,
+            timePositionMs = 3200f,
+            isManual = true
+        )
+        setNotesAndTempo(listOf(source, target), tempoBpm = 120)
+
+        vm.copyChordFrom(sourceIndex = 0, targetIndex = 1)
+
+        val updatedTarget = vm.notesList.value[1]
+        assertEquals(57, updatedTarget.midiPitch)
+        assertEquals(3, updatedTarget.guitarString)
+        assertEquals(2, updatedTarget.guitarFret)
+        assertEquals(listOf(60, 64), updatedTarget.chordPitches)
+        assertEquals(listOf(Pair(4, 1), Pair(5, 0)), updatedTarget.safeChordStringFrets)
+        assertEquals(3200f, updatedTarget.timePositionMs!!, 0.01f)
+    }
+
+    // ── moveNoteToFraction ─────────────────────────────────────────────────
+
+    @Test
+    fun moveNoteToFraction_updatesStartTimeAndClearsCursor() {
+        val notes = listOf(
+            quarterNote(60).copy(isManual = true, timePositionMs = 0f, guitarString = 3, guitarFret = 2),
+            quarterNote(62).copy(isManual = true, timePositionMs = 2000f, guitarString = 2, guitarFret = 0),
+            quarterNote(64).copy(isManual = true, timePositionMs = 4000f, guitarString = 1, guitarFret = 1)
+        )
+        setNotesAndTempo(notes, tempoBpm = 120)
+        vm.setEditCursor(0.25f)
+
+        vm.moveNoteToFraction(noteIndex = 0, startFraction = 0.6f)
+
+        val moved = vm.notesList.value.firstOrNull { it.midiPitch == 60 }
+        assertNotNull(moved)
+        assertTrue(moved!!.isManual)
+        assertTrue(abs((moved.timePositionMs ?: 0f) - 6000f) < 0.1f)
         assertNull(vm.editCursorFraction.value)
     }
 

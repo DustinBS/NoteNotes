@@ -36,6 +36,7 @@ import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import android.os.Environment
+import kotlin.math.abs
 
 private const val TAG = "NNPreview"
 
@@ -69,6 +70,9 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
 
     private val _audioDurationMs = MutableStateFlow(0)
     val audioDurationMs: StateFlow<Int> = _audioDurationMs
+
+    private val _leadingRestBeatCount = MutableStateFlow(0)
+    val leadingRestBeatCount: StateFlow<Int> = _leadingRestBeatCount
 
     private val _isRetranscribing = MutableStateFlow(false)
     val isRetranscribing: StateFlow<Boolean> = _isRetranscribing
@@ -117,6 +121,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         Log.i(TAG, "loadIdea: Loading idea id=$ideaId")
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                _leadingRestBeatCount.value = 0
                 val melodyIdea = dao.getIdeaById(ideaId) ?: run {
                     Log.e(TAG, "loadIdea: Idea $ideaId not found in database!")
                     _errorMessage.value = "Idea not found"
@@ -150,6 +155,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                         musicXmlGenerator.generateMusicXml(result)
                     )
                     _notesList.value = notes
+                    refreshLeadingRestBeatCount()
                     Log.d(TAG, "loadIdea: MusicXML regenerated successfully")
                 } else {
                     // Fallback: try loading from saved file (no notes in DB)
@@ -177,6 +183,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                             val parsedNotes = parseMusicXmlToNotes(content, melodyIdea.tempoBpm)
                             if (parsedNotes.isNotEmpty()) {
                                 _notesList.value = parsedNotes
+                                refreshLeadingRestBeatCount()
                                 Log.d(TAG, "loadIdea: Parsed ${parsedNotes.size} notes from MusicXML file")
 
                                 val keySig = parseKeySignature(melodyIdea.keySignature)
@@ -562,6 +569,65 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * Copy pitch/tab chord content from one note to another, preserving target timing.
+     */
+    fun copyChordFrom(sourceIndex: Int, targetIndex: Int) {
+        val currentNotes = _notesList.value.toMutableList()
+        if (sourceIndex !in currentNotes.indices || targetIndex !in currentNotes.indices) return
+        if (sourceIndex == targetIndex) return
+
+        val source = currentNotes[sourceIndex]
+        val target = currentNotes[targetIndex]
+
+        currentNotes[targetIndex] = target.copy(
+            midiPitch = source.midiPitch,
+            guitarString = source.guitarString,
+            guitarFret = source.guitarFret,
+            chordPitches = source.chordPitches,
+            chordStringFrets = source.safeChordStringFrets,
+            chordName = source.chordName,
+            isManual = true
+        )
+
+        updateNotesAndRefresh(currentNotes)
+        _selectedNoteIndex.value = targetIndex
+        Log.i(TAG, "copyChordFrom: Copied note/chord from index=$sourceIndex to index=$targetIndex")
+    }
+
+    /**
+     * Move a note's start time based on a 0..1 waveform fraction and recalculate durations.
+     */
+    fun moveNoteToFraction(noteIndex: Int, startFraction: Float) {
+        val durationMs = _audioDurationMs.value
+        if (durationMs <= 0) return
+
+        val currentNotes = _notesList.value.toMutableList()
+        if (noteIndex !in currentNotes.indices) return
+
+        val ideaTempo = _idea.value?.tempoBpm ?: 120
+        val oldNote = currentNotes[noteIndex]
+        val clampedStart = startFraction.coerceIn(0f, 1f) * durationMs
+
+        currentNotes[noteIndex] = oldNote.copy(
+            timePositionMs = clampedStart,
+            isManual = true
+        )
+
+        val sorted = recalculateNoteDurations(currentNotes, ideaTempo, durationMs)
+        updateNotesAndRefresh(sorted)
+
+        val bestMatchIndex = sorted.indices.minByOrNull { idx ->
+            val note = sorted[idx]
+            val dt = abs((note.timePositionMs ?: 0f) - clampedStart)
+            if (note.midiPitch == oldNote.midiPitch) dt else dt + 10_000f
+        } ?: noteIndex
+        _selectedNoteIndex.value = bestMatchIndex
+        _editCursorFraction.value = null
+
+        Log.i(TAG, "moveNoteToFraction: Moved note index=$noteIndex to ${String.format("%.0f", clampedStart)}ms")
+    }
+
+    /**
      * Split the note under the edit cursor into two notes at the cursor position.
      */
     fun splitNoteAtCursor() {
@@ -640,6 +706,49 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * Count synthetic leading-rest beats inserted by MusicXmlGenerator before the first note.
+     * This offset keeps alphaTab cursor indexing aligned with rendered score beats.
+     */
+    private fun refreshLeadingRestBeatCount() {
+        val notes = _notesList.value
+        val tempoBpm = _idea.value?.tempoBpm ?: 120
+        if (notes.isEmpty()) {
+            _leadingRestBeatCount.value = 0
+            return
+        }
+
+        val firstTimeMs = notes.first().timePositionMs
+        if (firstTimeMs == null || firstTimeMs <= 0f) {
+            _leadingRestBeatCount.value = 0
+            return
+        }
+
+        val divisions = 4
+        val tickMs = 60000.0 / tempoBpm / divisions
+        val gapTicks = Math.round(firstTimeMs / tickMs).toInt()
+        if (gapTicks <= 0) {
+            _leadingRestBeatCount.value = 0
+            return
+        }
+
+        // Mirror MusicXmlGenerator's greedy decomposition into standard durations.
+        val stdTicks = listOf(16, 12, 8, 6, 4, 3, 2, 1)
+        var remaining = gapTicks
+        var count = 0
+        while (remaining > 0) {
+            val segment = stdTicks.firstOrNull { it <= remaining }
+            if (segment != null) {
+                remaining -= segment
+                count++
+            } else {
+                count++
+                break
+            }
+        }
+        _leadingRestBeatCount.value = count
+    }
+
+    /**
      * Check if the edit cursor is currently inside a note (for showing split button).
      */
     fun isCursorInsideNote(): Boolean {
@@ -654,7 +763,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     /**
      * Delete the currently selected note.
      */
-    fun deleteSelectedNote() {
+    fun deleteSelectedNote(selectAdjacent: Boolean = true) {
         val idx = _selectedNoteIndex.value ?: return
         val currentNotes = _notesList.value.toMutableList()
         if (idx !in currentNotes.indices) return
@@ -664,6 +773,11 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
             "(MIDI ${removed.midiPitch}) at index $idx")
 
         updateNotesAndRefresh(currentNotes)
+        if (!selectAdjacent) {
+            _selectedNoteIndex.value = null
+            return
+        }
+
         // LIFO: select previous note, or next if first was deleted, or null if empty
         _selectedNoteIndex.value = when {
             currentNotes.isEmpty() -> null
@@ -849,13 +963,18 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
      */
     fun updateKeySignature(key: KeySignature) {
         viewModelScope.launch(Dispatchers.IO) {
-            val melodyIdea = _idea.value ?: return@launch
-            val updated = melodyIdea.copy(keySignature = key.toString())
-            dao.update(updated)
-            _idea.value = updated
-            // Regenerate MusicXML with new key
-            updateNotesAndRefresh(_notesList.value)
-            Log.i(TAG, "updateKeySignature: Changed to $key")
+            try {
+                val melodyIdea = _idea.value ?: return@launch
+                val updated = melodyIdea.copy(keySignature = key.toString())
+                dao.update(updated)
+                _idea.value = updated
+                // Refresh sheet music without touching export files
+                updateNotesAndRefresh(_notesList.value, skipFileRegen = true)
+                Log.i(TAG, "updateKeySignature: Changed to $key")
+            } catch (e: Exception) {
+                Log.e(TAG, "updateKeySignature: Error", e)
+                _errorMessage.value = "Error saving key signature: ${e.message}"
+            }
         }
     }
 
@@ -864,13 +983,18 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
      */
     fun updateTimeSignature(ts: TimeSignature) {
         viewModelScope.launch(Dispatchers.IO) {
-            val melodyIdea = _idea.value ?: return@launch
-            val updated = melodyIdea.copy(timeSignature = ts.toString())
-            dao.update(updated)
-            _idea.value = updated
-            // Regenerate MusicXML with new time signature
-            updateNotesAndRefresh(_notesList.value)
-            Log.i(TAG, "updateTimeSignature: Changed to $ts")
+            try {
+                val melodyIdea = _idea.value ?: return@launch
+                val updated = melodyIdea.copy(timeSignature = ts.toString())
+                dao.update(updated)
+                _idea.value = updated
+                // Refresh sheet music without touching export files
+                updateNotesAndRefresh(_notesList.value, skipFileRegen = true)
+                Log.i(TAG, "updateTimeSignature: Changed to $ts")
+            } catch (e: Exception) {
+                Log.e(TAG, "updateTimeSignature: Error", e)
+                _errorMessage.value = "Error saving time signature: ${e.message}"
+            }
         }
     }
 
@@ -879,13 +1003,18 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
      */
     fun updateTempoBpm(bpm: Int) {
         viewModelScope.launch(Dispatchers.IO) {
-            val melodyIdea = _idea.value ?: return@launch
-            val updated = melodyIdea.copy(tempoBpm = bpm)
-            dao.update(updated)
-            _idea.value = updated
-            // Regenerate MusicXML with new tempo
-            updateNotesAndRefresh(_notesList.value)
-            Log.i(TAG, "updateTempoBpm: Changed to $bpm")
+            try {
+                val melodyIdea = _idea.value ?: return@launch
+                val updated = melodyIdea.copy(tempoBpm = bpm)
+                dao.update(updated)
+                _idea.value = updated
+                // Refresh sheet music without touching export files
+                updateNotesAndRefresh(_notesList.value, skipFileRegen = true)
+                Log.i(TAG, "updateTempoBpm: Changed to $bpm")
+            } catch (e: Exception) {
+                Log.e(TAG, "updateTempoBpm: Error", e)
+                _errorMessage.value = "Error saving tempo: ${e.message}"
+            }
         }
     }
 
@@ -934,8 +1063,9 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
      * After adding or deleting notes, refresh all derived state (MusicXML, exports, DB).
      * Debounces disk writes — rapid edits within 300ms are coalesced.
      */
-    private fun updateNotesAndRefresh(notes: List<MusicalNote>) {
+    private fun updateNotesAndRefresh(notes: List<MusicalNote>, skipFileRegen: Boolean = false) {
         _notesList.value = notes
+        refreshLeadingRestBeatCount()
 
         // Cancel any pending save — the latest edit wins
         saveJob?.cancel()
@@ -963,37 +1093,43 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 )
                 _musicXml.value = xmlContent
 
-                // Regenerate export files
-                val title = melodyIdea.title
-                val externalMusicDir = File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
-                    "NoteNotes"
-                )
-                val exportsDir = File(externalMusicDir, "exports")
-                exportsDir.mkdirs()
+                if (!skipFileRegen) {
+                    // Regenerate export files
+                    val title = melodyIdea.title
+                    val externalMusicDir = File(
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                        "NoteNotes"
+                    )
+                    val exportsDir = File(externalMusicDir, "exports")
+                    exportsDir.mkdirs()
 
-                val midiFile = File(exportsDir, "$title.mid")
-                midiWriter.writeToFile(result, midiFile)
+                    val midiFile = File(exportsDir, "$title.mid")
+                    midiWriter.writeToFile(result, midiFile)
 
-                val xmlFile = File(exportsDir, "$title.musicxml")
-                musicXmlGenerator.writeToFile(result, xmlFile)
+                    val xmlFile = File(exportsDir, "$title.musicxml")
+                    musicXmlGenerator.writeToFile(result, xmlFile)
 
-                // Update database
-                val updatedIdea = melodyIdea.copy(
-                    notes = gson.toJson(notes),
-                    midiFilePath = midiFile.absolutePath,
-                    musicXmlFilePath = xmlFile.absolutePath
-                )
-                dao.update(updatedIdea)
-                _idea.value = updatedIdea
+                    val updatedIdea = melodyIdea.copy(
+                        notes = gson.toJson(notes),
+                        midiFilePath = midiFile.absolutePath,
+                        musicXmlFilePath = xmlFile.absolutePath
+                    )
+                    dao.update(updatedIdea)
+                    _idea.value = updatedIdea
+                } else {
+                    // Metadata-only change — update DB but skip file I/O
+                    val updatedIdea = melodyIdea.copy(notes = gson.toJson(notes))
+                    dao.update(updatedIdea)
+                    _idea.value = updatedIdea
+                }
 
-                Log.i(TAG, "updateNotesAndRefresh: Saved ${notes.size} notes")
+                Log.i(TAG, "updateNotesAndRefresh: Saved ${notes.size} notes (skipFileRegen=$skipFileRegen)")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Normal debounce cancellation — not an error, just re-throw
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "updateNotesAndRefresh: Error", e)
-                _errorMessage.value = "Error saving: ${e.message}"
+                _errorMessage.value = "Error regenerating export files — your notes were saved"
             }
         }
     }

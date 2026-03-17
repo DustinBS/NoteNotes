@@ -64,7 +64,19 @@ if (-not (Test-Path $apk)) {
     Write-Host "`nERROR: APK not found at $apk" -ForegroundColor Red
     exit 1
 }
-Write-Host "[4/5] Installing on $targetDevice..." -ForegroundColor Green
+
+# Re-verify device is still connected before installing
+Write-Host "[4/5] Verifying device connection..." -ForegroundColor Green
+$devicesCheck = & $adb devices 2>&1 | Where-Object { $_ -match "$targetDevice.*device$" }
+if (-not $devicesCheck) {
+    Write-Host "  Device lost connection. Restarting ADB server..." -ForegroundColor Yellow
+    & $adb kill-server | Out-Null
+    Start-Sleep -Milliseconds 500
+    & $adb start-server | Out-Null
+    Start-Sleep -Milliseconds 1000
+}
+
+Write-Host "  Installing APK..." -ForegroundColor Green
 & $adb @deviceArg install -r $apk
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`nERROR: Install failed!" -ForegroundColor Red

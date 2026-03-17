@@ -38,6 +38,7 @@ import com.notenotes.model.InstrumentProfile
 fun RecordScreen(
     onNavigateToPreview: (Long) -> Unit,
     onNavigateToLibrary: () -> Unit,
+    onNavigateToStats: () -> Unit,
     onNavigateToSettings: () -> Unit,
     viewModel: RecordViewModel = viewModel()
 ) {
@@ -92,6 +93,12 @@ fun RecordScreen(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Filled.LibraryMusic, contentDescription = "Library", modifier = Modifier.size(20.dp))
                             Text("Library", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                        }
+                    }
+                    IconButton(onClick = onNavigateToStats, modifier = Modifier.size(52.dp)) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Filled.BarChart, contentDescription = "Stats", modifier = Modifier.size(20.dp))
+                            Text("Stats", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
                         }
                     }
                     IconButton(onClick = onNavigateToSettings, modifier = Modifier.size(52.dp)) {

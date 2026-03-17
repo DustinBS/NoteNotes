@@ -12,6 +12,7 @@ import com.notenotes.ui.screens.LibraryScreen
 import com.notenotes.ui.screens.PreviewScreen
 import com.notenotes.ui.screens.RecordScreen
 import com.notenotes.ui.screens.SettingsScreen
+import com.notenotes.ui.screens.StatsScreen
 
 private const val TAG = "NNNav"
 
@@ -23,6 +24,7 @@ object Routes {
     const val PREVIEW = "preview/{ideaId}"
     const val LIBRARY = "library"
     const val SETTINGS = "settings"
+    const val STATS = "stats"
 
     fun preview(ideaId: Long) = "preview/$ideaId"
 }
@@ -47,6 +49,10 @@ fun NoteNotesNavHost(
                 onNavigateToLibrary = {
                     Log.d(TAG, "Navigating to LIBRARY")
                     navController.navigate(Routes.LIBRARY)
+                },
+                onNavigateToStats = {
+                    Log.d(TAG, "Navigating to STATS")
+                    navController.navigate(Routes.STATS)
                 },
                 onNavigateToSettings = {
                     Log.d(TAG, "Navigating to SETTINGS")
@@ -96,6 +102,12 @@ fun NoteNotesNavHost(
 
         composable(Routes.SETTINGS) {
             SettingsScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Routes.STATS) {
+            StatsScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
         }
