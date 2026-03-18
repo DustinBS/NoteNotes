@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -62,7 +63,7 @@ fun GuitarNoteEditor(
             return notePart.ifBlank { trimmed }
         }
 
-        fun formatEntry(pitch: Int, stringIndex: Int, fret: Int): String {
+        fun formatEntryAnnotated(pitch: Int, stringIndex: Int, fret: Int, isStrikethrough: Boolean = false): AnnotatedString {
             val rawLabel = GuitarUtils.STRINGS.getOrNull(stringIndex)?.label ?: "?"
             val stringLabel = normalizedStringLabel(rawLabel)
             val stringNumber = (GuitarUtils.STRINGS.size - stringIndex).coerceAtLeast(1)
@@ -70,15 +71,21 @@ fun GuitarNoteEditor(
             val noteIndex = pitch % 12
             val octave = (pitch / 12) - 1
             val noteName = "${sharpNames[noteIndex]}$octave"
-            return "$noteName | $stringNumber $stringLabel Fret $fret | MIDI $pitch"
-        }$octave"
-            return "$noteName | $stringNumber $stringLabel Fret $fret | MIDI $pitch"
-        }$octave"
-            return "$noteName | $stringNumber $stringLabel Fret $fret | MIDI $pitch"
-        } | $stringNumber $stringLabel Fret $fret | MIDI $pitch"
+            val stringColor = if (stringIndex in GuitarUtils.STRINGS.indices && !isStrikethrough) Color(GuitarUtils.STRINGS[stringIndex].colorArgb) else Color.Unspecified
+            val textDeco = if (isStrikethrough) TextDecoration.LineThrough else TextDecoration.None
+            val textWeight = if (isStrikethrough) FontWeight.Normal else FontWeight.SemiBold
+            
+            return buildAnnotatedString {
+                withStyle(SpanStyle(color = stringColor, fontWeight = textWeight, textDecoration = textDeco)) {
+                    append(noteName)
+                }
+                withStyle(SpanStyle(textDecoration = textDeco)) {
+                    append(" | $stringNumber $stringLabel Fret $fret | MIDI $pitch")
+                }
+            }
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             for (index in GuitarUtils.STRINGS.indices.reversed()) {
                 val gs = GuitarUtils.STRINGS[index]
                 val rowSelected = index == state.selectedStringIndex
@@ -155,23 +162,24 @@ fun GuitarNoteEditor(
                         Column(modifier = Modifier.weight(1f)) {
                             if (hasSelectedNote && changed && originalEntry != null) {
                                 Text(
-                                    text = formatEntry(originalEntry.first, originalEntry.second, originalEntry.third),
+                                    text = formatEntryAnnotated(originalEntry.first, originalEntry.second, originalEntry.third, isStrikethrough = true),
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textDecoration = TextDecoration.LineThrough
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
 
                             if (currentEntry != null) {
-                                val textStr = if (hasSelectedNote && changed && !(originalEntry == null && !hasSelectedNote)) {
-                                    "-> ${formatEntry(currentEntry.first, currentEntry.second, currentEntry.third)}"
+                                val textAnnotated = if (hasSelectedNote && changed && !(originalEntry == null && !hasSelectedNote)) {
+                                    buildAnnotatedString {
+                                        append("-> ")
+                                        append(formatEntryAnnotated(currentEntry.first, currentEntry.second, currentEntry.third))
+                                    }
                                 } else {
-                                    formatEntry(currentEntry.first, currentEntry.second, currentEntry.third)
+                                    formatEntryAnnotated(currentEntry.first, currentEntry.second, currentEntry.third)
                                 }
                                 Text(
-                                    text = textStr,
+                                    text = textAnnotated,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (rowSelected) FontWeight.Bold else FontWeight.Normal,
                                     color = if (isActive) sColor else MaterialTheme.colorScheme.onSurface
                                 )
                             } else if (hasSelectedNote && changed && originalEntry != null) {
@@ -192,9 +200,11 @@ fun GuitarNoteEditor(
 
                                 if (movedTargetEntry != null) {
                                     Text(
-                                        text = "-> ${formatEntry(movedTargetEntry.first, movedTargetEntry.second, movedTargetEntry.third)}",
+                                        text = buildAnnotatedString {
+                                            append("-> ")
+                                            append(formatEntryAnnotated(movedTargetEntry.first, movedTargetEntry.second, movedTargetEntry.third))
+                                        },
                                         style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Normal,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                 } else {
@@ -219,12 +229,10 @@ fun GuitarNoteEditor(
                         
                         if (canRemove) {
                             Spacer(modifier = Modifier.width(8.dp))
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Remove note",
-                                tint = MaterialTheme.colorScheme.error,
+                            Box(
                                 modifier = Modifier
-                                    .size(18.dp)
+                                    .size(24.dp)
+                                    .clip(CircleShape)
                                     .clickable {
                                         if (index == state.editedPrimaryString) {
                                             val promoted = state.removePrimaryNote()
@@ -237,8 +245,16 @@ fun GuitarNoteEditor(
                                                 state.removeChordNote(cIndex)
                                             }
                                         }
-                                    }
-                            )
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Remove note",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
                 }
