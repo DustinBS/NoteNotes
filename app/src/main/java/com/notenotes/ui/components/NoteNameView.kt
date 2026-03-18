@@ -503,6 +503,7 @@ private fun NoteEditDialog(
         }
     }
     var showDiscardWarning by remember { mutableStateOf(false) }
+    var showDeleteWholeNoteWarning by remember { mutableStateOf(false) }
 
     // Sync string/fret selector when switching between chord notes
     LaunchedEffect(editingChordPitchIndex) {
@@ -551,6 +552,26 @@ private fun NoteEditDialog(
         )
     }
 
+    if (showDeleteWholeNoteWarning) {
+        AlertDialog(
+            onDismissRequest = { showDeleteWholeNoteWarning = false },
+            title = { Text("Delete Note?") },
+            text = { Text("This is the last note in the chord. Deleting it will delete the whole chord.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteWholeNoteWarning = false
+                        onDelete()
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Delete Chord") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteWholeNoteWarning = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     AlertDialog(
         onDismissRequest = {
             if (hasUnsavedChanges) showDiscardWarning = true else onDismiss()
@@ -576,16 +597,16 @@ private fun NoteEditDialog(
             Column {
                 val isChordEditing = note.isChord || editableChordPitches.isNotEmpty()
                 Text(
-                    text = "String Selector",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "Tap a string row to add/edit notes.",
+                    text = androidx.compose.ui.text.buildAnnotatedString {
+                        withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) {
+                            append("String Selector: ")
+                        }
+                        append("Tap a string row to add/edit notes.")
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 fun normalizedStringLabel(rawLabel: String): String {
                     val trimmed = rawLabel.trim()
@@ -636,7 +657,7 @@ private fun NoteEditDialog(
 
                         val isActive = currentEntry != null
                         val changed = currentEntry != originalEntry
-                        val canRemove = currentChordIndex >= 0
+                        val canRemove = currentChordIndex >= 0 || index == editedPrimaryString
 
                         Surface(
                             modifier = Modifier
@@ -655,7 +676,7 @@ private fun NoteEditDialog(
                                             selectedStringIndex = sf.first
                                             selectedFret = sf.second
                                         }
-                                        isChordEditing -> {
+                                        else -> {
                                             val newFret = 0
                                             val newMidi = GuitarUtils.toMidi(index, newFret)
                                             editableChordPitches.add(newMidi)
@@ -663,10 +684,6 @@ private fun NoteEditDialog(
                                             editingChordPitchIndex = editableChordPitches.size - 1
                                             selectedStringIndex = index
                                             selectedFret = newFret
-                                        }
-                                        else -> {
-                                            selectedStringIndex = index
-                                            if (currentEntry != null) selectedFret = currentEntry.third
                                         }
                                     }
                                 },
@@ -699,7 +716,7 @@ private fun NoteEditDialog(
 
                                     if (currentEntry != null) {
                                         Text(
-                                            text = formatEntry(currentEntry),
+                                            text = if (changed) "-> ${formatEntry(currentEntry)}" else formatEntry(currentEntry),
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = if (rowSelected) FontWeight.Bold else FontWeight.Normal,
                                             color = if (isActive) sColor else MaterialTheme.colorScheme.onSurface
@@ -723,11 +740,23 @@ private fun NoteEditDialog(
                                         modifier = Modifier
                                             .size(18.dp)
                                             .clickable {
-                                                editableChordPitches.removeAt(currentChordIndex)
-                                                editableChordPositions.removeAt(currentChordIndex)
-                                                editingChordPitchIndex = null
-                                                selectedStringIndex = editedPrimaryString
-                                                selectedFret = editedPrimaryFret
+                                                if (currentChordIndex >= 0) {
+                                                    editableChordPitches.removeAt(currentChordIndex)
+                                                    editableChordPositions.removeAt(currentChordIndex)
+                                                    editingChordPitchIndex = null
+                                                    selectedStringIndex = editedPrimaryString
+                                                    selectedFret = editedPrimaryFret
+                                                } else if (index == editedPrimaryString && editableChordPitches.isNotEmpty()) {
+                                                    val promotedPitch = editableChordPitches.removeAt(0)
+                                                    val promotedSf = editableChordPositions.removeAt(0)
+                                                    editedPrimaryString = promotedSf.first
+                                                    editedPrimaryFret = promotedSf.second
+                                                    editingChordPitchIndex = null
+                                                    selectedStringIndex = promotedSf.first
+                                                    selectedFret = promotedSf.second
+                                                } else {
+                                                    showDeleteWholeNoteWarning = true
+                                                }
                                             },
                                         tint = MaterialTheme.colorScheme.error
                                     )
@@ -802,9 +831,15 @@ private fun NoteEditDialog(
             }
         },
         confirmButton = {
-            Row {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 FilledTonalButton(
                     onClick = onDelete,
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer,
                         contentColor = MaterialTheme.colorScheme.onErrorContainer
@@ -815,25 +850,32 @@ private fun NoteEditDialog(
                         contentDescription = null,
                         modifier = Modifier.size(14.dp)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Delete Chord")
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Delete Chord", fontSize = 12.sp)
                 }
-                Spacer(modifier = Modifier.weight(1f))
-                TextButton(onClick = {
-                    if (hasUnsavedChanges) showDiscardWarning = true else onDismiss()
-                }) { Text("Cancel") }
-                TextButton(onClick = {
-                    if ((note.isChord || editableChordPitches.isNotEmpty()) && onUpdateChordPitches != null) {
-                        onSave(noteIndex, editedPrimaryString, editedPrimaryFret)
-                          
-                          val fullPitches = listOf(GuitarUtils.toMidi(editedPrimaryString, editedPrimaryFret)) + editableChordPitches.toList()
-                          val fullPositions = listOf(Pair(editedPrimaryString, editedPrimaryFret)) + editableChordPositions.toList()
-                          
-                          onUpdateChordPitches(noteIndex, fullPitches, fullPositions)
-                    } else {
-                        onSave(noteIndex, editedPrimaryString, editedPrimaryFret)
-                    }
-                }) { Text("Save") }
+                OutlinedButton(
+                    onClick = {
+                        if (hasUnsavedChanges) showDiscardWarning = true else onDismiss()
+                    },
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) { Text("Cancel", fontSize = 12.sp) }
+                Button(
+                    onClick = {
+                        if ((note.isChord || editableChordPitches.isNotEmpty()) && onUpdateChordPitches != null) {
+                            onSave(noteIndex, editedPrimaryString, editedPrimaryFret)
+
+                            val fullPitches = listOf(GuitarUtils.toMidi(editedPrimaryString, editedPrimaryFret)) + editableChordPitches.toList()
+                            val fullPositions = listOf(Pair(editedPrimaryString, editedPrimaryFret)) + editableChordPositions.toList()
+
+                            onUpdateChordPitches(noteIndex, fullPitches, fullPositions)
+                        } else {
+                            onSave(noteIndex, editedPrimaryString, editedPrimaryFret)
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)
+                ) { Text("Save", fontSize = 12.sp) }
             }
         },
         dismissButton = null

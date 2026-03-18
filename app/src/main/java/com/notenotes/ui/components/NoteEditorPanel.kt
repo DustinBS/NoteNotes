@@ -172,7 +172,7 @@ fun NoteEditorPanel(
                         onDeleteSelected?.invoke()
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("Delete") }
+                ) { Text("Delete Chord") }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteWholeChordConfirm = false }) { Text("Cancel") }
@@ -229,7 +229,7 @@ fun NoteEditorPanel(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "String Selector - Tap a string row to add/edit notes.",
+                text = "String Selector: Tap a string row to add/edit notes.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -527,47 +527,58 @@ fun NoteEditorPanel(
             // Action buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                if (!hasSelectedNote) {
-                    // "Place Note" — places a new single note at cursor position
-                    Button(
-                        onClick = {
-                            val note = EditorNote(selectedStringIndex, selectedFret)
-                            val pairs = listOf(Pair(note.midiPitch, Pair(note.stringIndex, note.fret)))
-                            onAddNote(pairs)
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = editCursorActive,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text("Place Note", fontSize = 12.sp)
-                    }
-                }
-
-                // Split at cursor
-                if (canSplitAtCursor && onSplitAtCursor != null) {
+                if (onToggleMoveMode != null) {
                     OutlinedButton(
-                        onClick = onSplitAtCursor,
+                        onClick = onToggleMoveMode,
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        enabled = hasSelectedNote,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (isMoveMode) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            contentColor = if (isMoveMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
+                        ),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
                     ) {
-                        Icon(Icons.Filled.ContentCut, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text("Split", fontSize = 12.sp)
+                        Text(if (isMoveMode) "Move ON" else "Move Chord", fontSize = 11.sp, maxLines = 1)
                     }
                 }
 
-            }
+                if (onCopyFromNote != null && allNotes.isNotEmpty()) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        OutlinedButton(
+                            onClick = { showCopyFromMenu = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = hasSelectedNote,
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                        ) {
+                            Text("Copy From", fontSize = 11.sp, maxLines = 1)
+                        }
 
-            if (hasSelectedNote && selectedNoteIndex != null) {
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
+                        DropdownMenu(
+                            expanded = showCopyFromMenu,
+                            onDismissRequest = { showCopyFromMenu = false }
+                        ) {
+                            allNotes.forEachIndexed { idx, note ->
+                                if (selectedNoteIndex != null && idx == selectedNoteIndex) return@forEachIndexed
+                                val noteLabel = if (note.isChord) {
+                                    note.pitches.joinToString(" ") { pitch -> PitchUtils.midiToNoteName(pitch) }
+                                } else {
+                                    PitchUtils.midiToNoteName(note.pitches.firstOrNull() ?: 0)
+                                }
+                                DropdownMenuItem(
+                                    text = { Text("#${idx + 1} $noteLabel") },
+                                    onClick = {
+                                        onCopyFromNote(idx)
+                                        showCopyFromMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (hasSelectedNote && selectedNoteIndex != null) {
                     Button(
                         onClick = {
                             val idx = selectedNoteIndex
@@ -589,70 +600,36 @@ fun NoteEditorPanel(
                             originalChordStringFrets.addAll(draftChordStringFrets)
                         },
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
                     ) {
-                        Icon(Icons.Filled.Done, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Confirm Changes", fontSize = 12.sp)
+                        Text("Confirm", fontSize = 11.sp, maxLines = 1)
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            val note = EditorNote(selectedStringIndex, selectedFret)
+                            val pairs = listOf(Pair(note.midiPitch, Pair(note.stringIndex, note.fret)))
+                            onAddNote(pairs)
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = editCursorActive,
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                    ) {
+                        Text("Place Note", fontSize = 11.sp, maxLines = 1)
                     }
                 }
             }
 
-            if (onToggleMoveMode != null || onCopyFromNote != null) {
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(
+            if (!hasSelectedNote && canSplitAtCursor && onSplitAtCursor != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedButton(
+                    onClick = onSplitAtCursor,
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    if (onToggleMoveMode != null) {
-                        OutlinedButton(
-                            onClick = onToggleMoveMode,
-                            modifier = Modifier.weight(1f),
-                            enabled = hasSelectedNote,
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (isMoveMode) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                contentColor = if (isMoveMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
-                            )
-                        ) {
-                            Icon(Icons.Filled.OpenWith, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(if (isMoveMode) "Move ON" else "Move", fontSize = 12.sp)
-                        }
-                    }
-
-                    if (onCopyFromNote != null && allNotes.isNotEmpty()) {
-                        Box(modifier = Modifier.weight(1f)) {
-                            OutlinedButton(
-                                onClick = { showCopyFromMenu = true },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Copy From", fontSize = 12.sp)
-                            }
-
-                            DropdownMenu(
-                                expanded = showCopyFromMenu,
-                                onDismissRequest = { showCopyFromMenu = false }
-                            ) {
-                                allNotes.forEachIndexed { idx, note ->
-                                    if (selectedNoteIndex != null && idx == selectedNoteIndex) return@forEachIndexed
-                                    val noteLabel = if (note.isChord) {
-                                        note.pitches.joinToString(" ") { pitch -> PitchUtils.midiToNoteName(pitch) }
-                                    } else {
-                                        PitchUtils.midiToNoteName(note.pitches.firstOrNull() ?: 0)
-                                    }
-                                    DropdownMenuItem(
-                                        text = { Text("#${idx + 1} $noteLabel") },
-                                        onClick = {
-                                            onCopyFromNote(idx)
-                                            showCopyFromMenu = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    Icon(Icons.Filled.ContentCut, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Split at Cursor", fontSize = 12.sp)
                 }
             }
 
