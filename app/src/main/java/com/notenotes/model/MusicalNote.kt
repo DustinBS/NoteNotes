@@ -123,14 +123,14 @@ class MusicalNoteAdapter : JsonDeserializer<MusicalNote>, JsonSerializer<Musical
         val timePositionMs = if (obj.has("timePositionMs") && !obj.get("timePositionMs").isJsonNull) obj.get("timePositionMs").asFloat else null
 
         return MusicalNote(
-            pitches = pitches.distinct(),
+            pitches = pitches,
             durationTicks = durationTicks,
             type = type,
             dotted = dotted,
             isRest = isRest,
             tiedToNext = tiedToNext,
             velocity = velocity,
-            tabPositions = tabPositions.distinct(),
+            tabPositions = tabPositions,
             chordName = chordName,
             isManual = isManual,
             timePositionMs = timePositionMs

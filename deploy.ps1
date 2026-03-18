@@ -18,6 +18,15 @@ Write-Host "[1/5] JDK: $javaVer" -ForegroundColor Green
 
 # --- Step 2: Check device ---
 Write-Host "[2/5] Checking connected devices..." -ForegroundColor Green
+
+# Ensure ADB server is running
+Write-Host "  Starting ADB server..." -ForegroundColor Yellow
+& $adb start-server
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`nERROR: Failed to start ADB server!" -ForegroundColor Red
+    exit 1
+}
+
 $devices = & $adb devices 2>&1 | Where-Object { $_ -match "device$" }
 $deviceCount = @($devices).Count
 

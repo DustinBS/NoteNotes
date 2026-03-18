@@ -24,12 +24,19 @@ private val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+/** Migration from v3 -> v4: add lastExportPath column */
+private val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE melody_ideas ADD COLUMN lastExportPath TEXT DEFAULT NULL")
+    }
+}
+
 /**
  * Room database for NoteNotes app.
  * Stores metadata about recorded melody ideas.
  * Audio/MIDI/XML files are stored on the file system.
  */
-@Database(entities = [MelodyIdea::class], version = 3, exportSchema = false)
+@Database(entities = [MelodyIdea::class], version = 4, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun melodyDao(): MelodyDao
@@ -45,7 +52,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "notenotes_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

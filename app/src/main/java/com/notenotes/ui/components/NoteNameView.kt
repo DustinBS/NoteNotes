@@ -825,7 +825,11 @@ private fun NoteEditDialog(
                 TextButton(onClick = {
                     if ((note.isChord || editableChordPitches.isNotEmpty()) && onUpdateChordPitches != null) {
                         onSave(noteIndex, editedPrimaryString, editedPrimaryFret)
-                        onUpdateChordPitches(noteIndex, editableChordPitches.toList(), editableChordPositions.toList())
+                          
+                          val fullPitches = listOf(GuitarUtils.toMidi(editedPrimaryString, editedPrimaryFret)) + editableChordPitches.toList()
+                          val fullPositions = listOf(Pair(editedPrimaryString, editedPrimaryFret)) + editableChordPositions.toList()
+                          
+                          onUpdateChordPitches(noteIndex, fullPitches, fullPositions)
                     } else {
                         onSave(noteIndex, editedPrimaryString, editedPrimaryFret)
                     }

@@ -67,9 +67,6 @@ fun SettingsScreen(
         }
     }
 
-    val coroutineScope = rememberCoroutineScope()
-    var isMigrating by remember { mutableStateOf(false) }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -213,94 +210,6 @@ fun SettingsScreen(
                 ) {
                     Text("Reset to default", style = MaterialTheme.typography.labelSmall)
                 }
-            }
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            Text(
-                text = "About",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = "NoteNotes v0.1.0",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Text(
-                text = "Auto-transcribing voice memo app for musicians.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                text = "Open Source Libraries",
-                style = MaterialTheme.typography.titleSmall
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "• OpenSheetMusicDisplay (BSD-3-Clause)\n• Jetpack Compose (Apache-2.0)\n• Room Database (Apache-2.0)",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            Button(
-                onClick = {
-                    if (isMigrating) return@Button
-                    isMigrating = true
-                    coroutineScope.launch {
-                        try {
-                            withContext(Dispatchers.IO) {
-                                val db = AppDatabase.getDatabase(context)
-                                val dao = db.melodyDao()
-                                val ideas = dao.getAllIdeasSnapshot()
-                                
-                                val gson = Gson()
-                                val listType = object : TypeToken<List<MusicalNote>>() {}.type
-                                
-                                var migratedCount = 0
-                                ideas.forEach { idea ->
-                                    val notesJson = idea.notes
-                                    if (!notesJson.isNullOrEmpty()) {
-                                        try {
-                                            val parsed: List<MusicalNote> = gson.fromJson(notesJson, listType) ?: emptyList()
-                                            // sanitizeList will handle list parsing issues like missing properties
-                                            val sanitized = MusicalNote.sanitizeList(parsed)
-                                            val newJson = gson.toJson(sanitized)
-                                            
-                                            // Only update if it actually fixed something
-                                            if (newJson != notesJson) {
-                                                dao.update(idea.copy(notes = newJson))
-                                                migratedCount++
-                                            }
-                                        } catch (e: Exception) {
-                                            e.printStackTrace()
-                                        }
-                                    }
-                                }
-                                
-                                withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, "Migration complete. Updated $migratedCount projects.", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(context, "Migration failed: ${e.message}", Toast.LENGTH_LONG).show()
-                            }
-                        } finally {
-                            isMigrating = false
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isMigrating
-            ) {
-                Text(if (isMigrating) "Migrating..." else "Migrate Old Projects")
             }
         }
     }

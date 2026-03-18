@@ -71,11 +71,6 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     private val _audioDurationMs = MutableStateFlow(0)
     val audioDurationMs: StateFlow<Int> = _audioDurationMs
 
-    // Save-to-device conflict state
-    data class SaveConflict(val folderName: String)
-    private val _saveConflict = MutableStateFlow<SaveConflict?>(null)
-    val saveConflict: StateFlow<SaveConflict?> = _saveConflict
-
     private val _leadingRestBeatCount = MutableStateFlow(0)
     val leadingRestBeatCount: StateFlow<Int> = _leadingRestBeatCount
 
@@ -270,21 +265,21 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
 
     fun shareMidi(context: Context) {
         val result = buildResult() ?: return
-        val title = _idea.value?.title ?: "melody"
+        val title = _idea.value?.title?.replace(Regex("[\\\\/:*?\"<>|]"), "_") ?: "melody"
         val intent = fileExporter.shareMidi(result, title)
         context.startActivity(Intent.createChooser(intent, "Share MIDI"))
     }
 
     fun shareMusicXml(context: Context) {
         val result = buildResult() ?: return
-        val title = _idea.value?.title ?: "melody"
+        val title = _idea.value?.title?.replace(Regex("[\\\\/:*?\"<>|]"), "_") ?: "melody"
         val intent = fileExporter.shareMusicXml(result, title)
         context.startActivity(Intent.createChooser(intent, "Share MusicXML"))
     }
 
     fun shareAll(context: Context) {
         val result = buildResult() ?: return
-        val title = _idea.value?.title ?: "melody"
+        val title = _idea.value?.title?.replace(Regex("[\\\\/:*?\"<>|]"), "_") ?: "melody"
         val audioFile = _idea.value?.audioFilePath?.let { File(it) }
         val intent = fileExporter.shareAll(result, title, audioFile)
         context.startActivity(Intent.createChooser(intent, "Share Files"))
@@ -296,7 +291,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
      */
     fun shareSnapshot(context: Context) {
         val melodyIdea = _idea.value ?: return
-        val title = melodyIdea.title
+        val title = melodyIdea.title.replace(Regex("[\\\\/:*?\"<>|]"), "_")
         val dir = File(context.filesDir, "exports")
         dir.mkdirs()
         val zipFile = File(dir, "$title.notenotes.zip")
@@ -457,7 +452,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val primaryFret = primaryEntry.second.second
         // Create chord entries sorted by MIDI pitch (so chordPitches and chordStringFrets stay in sync)
         val chordEntries = if (editorNotes.size > 1) {
-            editorNotes.filter { it.first != primaryMidi }.sortedBy { it.first }
+            editorNotes.filter { it.second != primaryEntry.second }.sortedBy { it.first }
         } else emptyList()
         val chordPitches = chordEntries.map { it.first }
         val chordStringFrets = chordEntries.map { Pair(it.second.first, it.second.second) }
@@ -563,21 +558,29 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
 
     /**
      * Update the chord pitches and their string/fret positions for a note at a specific index.
-     * newChordPitches and newChordStringFrets here DO NOT contain the primary note.
+     * fullPitches and fullStringFrets here MUST contain the primary note at index 0.
      */
-    fun updateChordPitches(index: Int, newChordPitches: List<Int>, newChordStringFrets: List<Pair<Int, Int>>) {
+    fun updateChordPitches(index: Int, fullPitches: List<Int>, fullStringFrets: List<Pair<Int, Int>>) {
         val currentNotes = _notesList.value.toMutableList()
         if (index !in currentNotes.indices) return
         val oldNote = currentNotes[index]
-        val primaryPitch = oldNote.pitches.firstOrNull() ?: 60
-        val primaryTab = oldNote.safeTabPositions.firstOrNull() ?: Pair(0, 0)
         
-        val paired = newChordPitches.zip(newChordStringFrets).filter { it.first != primaryPitch }.sortedBy { it.first }
-        
+        if (fullPitches.isEmpty() || fullStringFrets.isEmpty()) return
+
+        val primaryPitch = fullPitches.first()
+        val primaryTab = fullStringFrets.first()
+
+        // Keep the rest of the notes, filtering out accidental duplicate exact strings
+        // Sort the rest by pitch for standardized chord rendering
+        val restPaired = fullPitches.zip(fullStringFrets).drop(1)
+            .filter { it.second != primaryTab } // don't duplicate the primary note perfectly
+            .distinctBy { it.second.first } // ensure one note per physical guitar string max
+            .sortedBy { it.first } // sort by pitch 
+
         currentNotes[index] = oldNote.copy(
-            pitches = listOf(primaryPitch) + paired.map { it.first },
-            tabPositions = listOf(primaryTab) + paired.map { it.second },
-            chordName = if (paired.isEmpty()) null else (oldNote.chordName ?: "Chord")
+            pitches = listOf(primaryPitch) + restPaired.map { it.first },
+            tabPositions = listOf(primaryTab) + restPaired.map { it.second },
+            chordName = if (restPaired.isEmpty()) null else (oldNote.chordName ?: "Chord")
         )
         updateNotesAndRefresh(currentNotes)
         Log.i(TAG, "updateChordPitches: Updated chord at $index, pitches=${currentNotes[index].pitches}")
@@ -845,38 +848,23 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     /**
      * Save all files (MIDI, MusicXML, Audio) to the user's configured directory,
      * falling back to Downloads/NoteNotes. Files are saved into an idea-named subfolder.
-     * If the subfolder already exists, prompts user to rename or overwrite.
      */
-    fun saveToDevice(context: Context) {
+    fun saveToDevice(context: Context, customName: String? = null) {
         val melodyIdea = _idea.value ?: return
-        val folderName = melodyIdea.title
+        val rawName = customName?.takeIf { it.isNotBlank() } ?: melodyIdea.title
+        val folderName = rawName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        performSave(context, folderName, overwrite = true) // The UI layer checks for overwrite warning
+    }
+
+    /**
+     * Checks if a folder already exists under the proposed custom name. 
+     */
+    fun doesSaveDirectoryExist(context: Context, customName: String): Boolean {
+        if (customName.isBlank()) return false
+        val folderName = customName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
         val saveDir = resolveSaveDir(context)
         val ideaDir = File(saveDir, folderName)
-
-        if (ideaDir.exists() && ideaDir.list()?.isNotEmpty() == true) {
-            // Folder has content — prompt user
-            _saveConflict.value = SaveConflict(folderName)
-        } else {
-            performSave(context, folderName, overwrite = false)
-        }
-    }
-
-    /** User chose to overwrite existing folder. */
-    fun confirmSaveOverwrite(context: Context) {
-        val conflict = _saveConflict.value ?: return
-        _saveConflict.value = null
-        performSave(context, conflict.folderName, overwrite = true)
-    }
-
-    /** User chose a new folder name. */
-    fun confirmSaveRename(context: Context, newName: String) {
-        _saveConflict.value = null
-        performSave(context, newName.trim(), overwrite = false)
-    }
-
-    /** User cancelled save. */
-    fun cancelSave() {
-        _saveConflict.value = null
+        return ideaDir.exists() && ideaDir.list()?.isNotEmpty() == true
     }
 
     /** Resolve the base save directory from SharedPreferences or default Downloads/NoteNotes. */
@@ -929,7 +917,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 }
                 ideaDir.mkdirs()
 
-                val title = melodyIdea.title
+                val saveName = folderName
 
                 var savedCount = 0
                 val savedPaths = mutableListOf<String>()
@@ -940,7 +928,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                     val src = File(path)
                     if (src.exists()) {
                         val ext = src.extension.ifEmpty { "wav" }
-                        val dest = File(ideaDir, "$title.$ext")
+                        val dest = File(ideaDir, "$saveName.$ext")
                         src.copyTo(dest, overwrite = true)
                         savedPaths.add(dest.absolutePath)
                         savedMimes.add(when (ext.lowercase()) {
@@ -956,7 +944,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 melodyIdea.midiFilePath?.let { path ->
                     val src = File(path)
                     if (src.exists()) {
-                        val dest = File(ideaDir, "$title.mid")
+                        val dest = File(ideaDir, "$saveName.mid")
                         src.copyTo(dest, overwrite = true)
                         savedPaths.add(dest.absolutePath)
                         savedMimes.add("audio/midi")
@@ -968,7 +956,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                 melodyIdea.musicXmlFilePath?.let { path ->
                     val src = File(path)
                     if (src.exists()) {
-                        val dest = File(ideaDir, "$title.musicxml")
+                        val dest = File(ideaDir, "$saveName.musicxml")
                         src.copyTo(dest, overwrite = true)
                         savedPaths.add(dest.absolutePath)
                         savedMimes.add("application/xml")
@@ -985,6 +973,11 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                         null
                     )
                 }
+
+                // Save last export path to DB
+                val updatedIdea = melodyIdea.copy(lastExportPath = ideaDir.absolutePath)
+                dao.update(updatedIdea)
+                _idea.value = updatedIdea
 
                 kotlinx.coroutines.withContext(Dispatchers.Main) {
                     android.widget.Toast.makeText(
@@ -1010,7 +1003,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
     /**
      * Open the Downloads/NoteNotes folder in the system file manager.
      */
-    fun openInFileManager(context: Context) {
+    fun openInFileManager(context: Context, targetPath: String? = null) {
         try {
             val downloadsDir = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
@@ -1018,10 +1011,17 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
             )
             if (!downloadsDir.exists()) downloadsDir.mkdirs()
 
+            var baseUriString = "content://com.android.externalstorage.documents/document/primary:Download%2FNoteNotes"
+            if (targetPath != null && targetPath.contains("Download/NoteNotes/")) {
+                val subPath = targetPath.substringAfter("Download/NoteNotes/")
+                if (subPath.isNotBlank()) {
+                    val encodedSubPath = android.net.Uri.encode(subPath)
+                    baseUriString += "%2F$encodedSubPath"
+                }
+            }
+
             // Try the standard Documents UI
-            val uri = android.net.Uri.parse(
-                "content://com.android.externalstorage.documents/document/primary:Download%2FNoteNotes"
-            )
+            val uri = android.net.Uri.parse(baseUriString)
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "vnd.android.document/directory")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK

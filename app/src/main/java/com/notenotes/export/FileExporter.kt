@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import androidx.core.content.FileProvider
 import com.notenotes.export.MusicXmlSanitizer
-import com.notenotes.model.NntTranscription
 import com.notenotes.model.TranscriptionResult
 import java.io.File
 
@@ -81,26 +80,6 @@ class FileExporter(
     }
 
     /**
-     * Export transcription to NoteNotes Transcription (.nnt) file.
-     * @return the saved file
-     */
-    fun exportNnt(transcription: NntTranscription, filename: String): File {
-        val dir = File(context.filesDir, "exports")
-        dir.mkdirs()
-        val file = File(dir, "$filename.${NntTranscription.FILE_EXTENSION}")
-        NntFile.write(transcription, file)
-        return file
-    }
-
-    /**
-     * Share a NoteNotes Transcription (.nnt) file.
-     */
-    fun shareNnt(transcription: NntTranscription, filename: String): Intent {
-        val file = exportNnt(transcription, filename)
-        return createShareIntent(file, NntTranscription.MIME_TYPE)
-    }
-
-    /**
      * Share an audio file, renamed to match the idea title.
      */
     fun shareAudioFile(audioFile: File, title: String? = null): Intent {
@@ -122,9 +101,9 @@ class FileExporter(
     }
 
     /**
-     * Share MIDI, MusicXML, and NNT transcription files (plus optional audio).
+     * Share MIDI, MusicXML transcription files (plus optional audio).
      */
-    fun shareAll(result: TranscriptionResult, filename: String, audioFile: File? = null, nntTranscription: NntTranscription? = null): Intent {
+    fun shareAll(result: TranscriptionResult, filename: String, audioFile: File? = null): Intent {
         val midiFile = exportMidi(result, filename)
         val xmlFile = exportMusicXml(result, filename)
 
@@ -132,12 +111,6 @@ class FileExporter(
             FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", midiFile),
             FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", xmlFile)
         )
-
-        // Include NNT transcription file
-        if (nntTranscription != null) {
-            val nntFile = exportNnt(nntTranscription, filename)
-            uris.add(FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", nntFile))
-        }
 
         // Include the audio file if available
         if (audioFile != null && audioFile.exists()) {

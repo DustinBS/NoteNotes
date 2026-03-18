@@ -70,7 +70,6 @@ fun PreviewScreen(
     val isWindowLocked by viewModel.isWindowLocked.collectAsState()
     val isRenameDialogOpen by viewModel.isRenameDialogOpen.collectAsState()
     val playbackSpeed by viewModel.playbackSpeed.collectAsState()
-    val saveConflict by viewModel.saveConflict.collectAsState()
 
     // Tab state from ViewModel (persists across navigation)
     val selectedTab by viewModel.selectedTab.collectAsState()
@@ -100,6 +99,7 @@ fun PreviewScreen(
     var showTimeDialog by remember { mutableStateOf(false) }
     var showBpmDialog by remember { mutableStateOf(false) }
     var showInstrumentDialog by remember { mutableStateOf(false) }
+    var showSaveAsDialog by remember { mutableStateOf(false) }
     var waveformEditorHasPendingChanges by remember { mutableStateOf(false) }
     var showWaveformDiscardDialog by remember { mutableStateOf(false) }
     var pendingWaveformIntent by remember { mutableStateOf<Triple<Int?, Float?, Float?>?>(null) }
@@ -304,50 +304,6 @@ fun PreviewScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    // Save conflict dialog (folder already exists)
-    if (saveConflict != null) {
-        var renameFolderText by remember(saveConflict) { 
-            mutableStateOf(saveConflict!!.folderName) 
-        }
-        AlertDialog(
-            onDismissRequest = { viewModel.cancelSave() },
-            title = { Text("Folder Already Exists") },
-            text = {
-                Column {
-                    Text(
-                        "A folder named \"${saveConflict!!.folderName}\" already contains files. " +
-                            "You can overwrite the existing files or choose a different name.",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    OutlinedTextField(
-                        value = renameFolderText,
-                        onValueChange = { renameFolderText = it },
-                        label = { Text("Folder name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Row {
-                    if (renameFolderText.trim() != saveConflict!!.folderName) {
-                        TextButton(onClick = {
-                            viewModel.confirmSaveRename(context, renameFolderText)
-                        }) { Text("Save As") }
-                    } else {
-                        TextButton(onClick = {
-                            viewModel.confirmSaveOverwrite(context)
-                        }) { Text("Overwrite") }
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.cancelSave() }) { Text("Cancel") }
             }
         )
     }
@@ -617,6 +573,55 @@ fun PreviewScreen(
         )
     }
 
+    if (showSaveAsDialog) {
+        var saveName by remember { mutableStateOf(idea?.title?.replace(Regex("[\\\\/:*?\"<>|]"), "_") ?: "") }
+        var isOverwrite by remember(saveName) { mutableStateOf(viewModel.doesSaveDirectoryExist(context, saveName)) }
+        AlertDialog(
+            onDismissRequest = { showSaveAsDialog = false },
+            title = { Text("Save to Device") },
+            text = {
+                Column {
+                    Text(
+                        "Enter a name to save the files under. They will be placed in the NoteNotes folder in your device Downloads directory.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    OutlinedTextField(
+                        value = saveName,
+                        onValueChange = { 
+                            saveName = it
+                            isOverwrite = viewModel.doesSaveDirectoryExist(context, it)
+                        },
+                        label = { Text("Folder/File name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (isOverwrite) {
+                        Text(
+                            "Folder already exists, saving will overwrite existing files.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.saveToDevice(context, saveName)
+                        showSaveAsDialog = false
+                    },
+                    enabled = saveName.isNotBlank()
+                ) { Text(if (isOverwrite) "Save & Overwrite" else "Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveAsDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -695,7 +700,7 @@ fun PreviewScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text("Save to Device") },
-                                onClick = { showMenu = false; viewModel.saveToDevice(context) },
+                                onClick = { showMenu = false; showSaveAsDialog = true },
                                 leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) }
                             )
                             DropdownMenuItem(
@@ -889,6 +894,42 @@ fun PreviewScreen(
                                     trailingIcon = { Icon(Icons.Filled.Edit, contentDescription = "Edit", modifier = Modifier.size(14.dp)) },
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                                 )
+                                
+                                val exportPath = melodyIdea.lastExportPath
+                                if (exportPath != null) {
+                                    val dateStr = try {
+                                        val f = java.io.File(exportPath)
+                                        if (f.exists()) {
+                                            java.text.SimpleDateFormat("MMMM d, yyyy", java.util.Locale.getDefault()).format(java.util.Date(f.lastModified()))
+                                        } else {
+                                            "Unknown Date"
+                                        }
+                                    } catch (e: Exception) {
+                                        "Unknown Date"
+                                    }
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                "Last Saved at $dateStr\nIn: \"$exportPath\"",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                maxLines = 3,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                            )
+                                        },
+                                        onClick = { showMenu = false; viewModel.openInFileManager(context, exportPath) },
+                                        trailingIcon = { Icon(Icons.Filled.OpenInNew, contentDescription = "Open Folder", modifier = Modifier.size(16.dp)) },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                                    )
+                                } else {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text("Last Saved: Never", style = MaterialTheme.typography.bodySmall)
+                                        },
+                                        onClick = {},
+                                        enabled = false,
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                                    )
+                                }
                             }
 
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))

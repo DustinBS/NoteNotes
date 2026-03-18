@@ -19,5 +19,6 @@ data class MelodyIdea(
     val deletedAt: Long? = null,       // epoch millis when soft-deleted (null = active)
     val groupId: String? = null,       // UUID grouping key (null = ungrouped)
     val groupName: String? = null,     // user-visible group name
-    val lastOpenedAt: Long? = null     // epoch millis when last opened for preview
+    val lastOpenedAt: Long? = null,    // epoch millis when last opened for preview
+    val lastExportPath: String? = null // file path/name of user's last manual export
 )

@@ -166,6 +166,12 @@ fun WaveformView(
 
     val context = LocalContext.current
 
+    val currentNoteOverlays by rememberUpdatedState(noteOverlays)
+    val currentWindowStartFraction by rememberUpdatedState(windowStartFraction)
+    val currentWindowFractionSize by rememberUpdatedState(windowFractionSize)
+    val currentSelectedNoteIndex by rememberUpdatedState(selectedNoteIndex)
+    val currentIsMoveMode by rememberUpdatedState(isMoveMode)
+
     fun dispatchEditIntent(noteIndex: Int?, cursorFraction: Float?, seekFraction: Float?) {
         val intent = onEditIntent
         if (intent != null) {
@@ -182,7 +188,7 @@ fun WaveformView(
         modifier = modifier
             .fillMaxSize()
             .background(bgColor)
-            .pointerInput(noteOverlays, windowStartFraction, windowFractionSize, selectedNoteIndex, isMoveMode) {
+            .pointerInput(Unit) {
                 val longPressTimeoutMs = viewConfiguration.longPressTimeoutMillis
                 awaitEachGesture {
                     val down = awaitFirstDown()
@@ -206,8 +212,8 @@ fun WaveformView(
                         isLongPress -> {
                             // Long press: select note + haptic
                             val localFrac = (downX / size.width).coerceIn(0f, 1f)
-                            val globalFrac = windowStartFraction + localFrac * windowFractionSize
-                            val tappedNote = noteOverlays.find { overlay ->
+                            val globalFrac = currentWindowStartFraction + localFrac * currentWindowFractionSize
+                            val tappedNote = currentNoteOverlays.find { overlay ->
                                 globalFrac >= overlay.startFraction && globalFrac <= overlay.endFraction
                             }
                             if (tappedNote != null) {
@@ -233,18 +239,33 @@ fun WaveformView(
                         dragPointerChange != null -> {
                             // Drag detected
                             val change = dragPointerChange!!
-                            if (isMoveMode && selectedNoteIndex != null && onMoveSelectedNote != null) {
-                                val selectedOverlay = noteOverlays.find { it.noteIndex == selectedNoteIndex }
-                                if (selectedOverlay != null) {
-                                    val downLocalFrac = (downX / size.width).coerceIn(0f, 1f)
-                                    val downGlobalFrac = windowStartFraction + downLocalFrac * windowFractionSize
-                                    val grabOffset = downGlobalFrac - selectedOverlay.startFraction
+                            if (currentIsMoveMode && currentSelectedNoteIndex != null && onMoveSelectedNote != null) {
+                                val initialSelectedOverlay = currentNoteOverlays.find { it.noteIndex == currentSelectedNoteIndex }
+                                if (initialSelectedOverlay != null) {
+                                    // By storing grabOffset, the note smoothly tracks the finger without suddenly teleporting the start edge to the pointer.
+                                    var grabOffset = change.position.x - (initialSelectedOverlay.startFraction - currentWindowStartFraction) / currentWindowFractionSize * size.width
+
+                                    var dragNoteIndex = currentSelectedNoteIndex!!
 
                                     fun moveToPointerX(x: Float) {
-                                        val localFrac = (x / size.width).coerceIn(0f, 1f)
-                                        val globalFrac = windowStartFraction + localFrac * windowFractionSize
-                                        val targetStart = (globalFrac - grabOffset).coerceIn(0f, 1f)
-                                        onMoveSelectedNote(selectedNoteIndex, targetStart)
+                                        val adjustedX = x - grabOffset
+                                        val localFrac = (adjustedX / size.width)
+                                        val globalFrac = currentWindowStartFraction + localFrac * currentWindowFractionSize
+                                        val targetStart = globalFrac.coerceIn(0f, 1f)
+                                        
+                                        // Once we move the note, PreviewViewModel might sort it and change its index!
+                                        // We rely on ViewModel sorting logic, but must ensure we follow it.
+                                        // However, PreviewViewModel only changes `selectedNoteIndex` which we read via currentSelectedNoteIndex.
+                                        onMoveSelectedNote(dragNoteIndex, targetStart)
+                                        dragNoteIndex = currentSelectedNoteIndex ?: dragNoteIndex
+
+                                        // Recalculate grabOffset based on the new note position so it stays glued to finger
+                                        val newlySortedOverlay = currentNoteOverlays.find { it.noteIndex == dragNoteIndex }
+                                        if (newlySortedOverlay != null) {
+                                            val noteScreenX = (newlySortedOverlay.startFraction - currentWindowStartFraction) / currentWindowFractionSize * size.width
+                                            grabOffset = x - noteScreenX
+                                        }
+
                                         onEditCursorSet?.invoke(null)
                                     }
 
@@ -256,12 +277,12 @@ fun WaveformView(
                                 }
                             } else {
                                 val localFrac = (change.position.x / size.width).coerceIn(0f, 1f)
-                                val globalFrac = windowStartFraction + localFrac * windowFractionSize
+                                val globalFrac = currentWindowStartFraction + localFrac * currentWindowFractionSize
                                 dispatchEditIntent(null, globalFrac, globalFrac)
                                 horizontalDrag(change.id) { dragChange ->
                                     dragChange.consume()
                                     val lf = (dragChange.position.x / size.width).coerceIn(0f, 1f)
-                                    val gf = windowStartFraction + lf * windowFractionSize
+                                    val gf = currentWindowStartFraction + lf * currentWindowFractionSize
                                     dispatchEditIntent(null, gf, gf)
                                 }
                             }
@@ -269,7 +290,7 @@ fun WaveformView(
                         else -> {
                             // Short tap
                             val localFrac = (downX / size.width).coerceIn(0f, 1f)
-                            val globalFrac = windowStartFraction + localFrac * windowFractionSize
+                            val globalFrac = currentWindowStartFraction + localFrac * currentWindowFractionSize
                             dispatchEditIntent(null, globalFrac, globalFrac)
                         }
                     }
