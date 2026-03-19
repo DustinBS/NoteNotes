@@ -20,13 +20,16 @@ fun SearchAndSortHeader(
     isSearchExpanded: Boolean,
     onSearchExpandedChange: (Boolean) -> Unit,
     sortMode: SortMode,
-    onSortModeChange: (SortMode) -> Unit
+    onSortModeChange: (SortMode) -> Unit,
+    modifier: Modifier = Modifier,
+    horizontalPadding: androidx.compose.ui.unit.Dp = 16.dp,
+    searchPlaceholder: String = "Search ideas or folders..."
 ) {
-    Column {
+    Column(modifier = modifier) {
         Row(
             modifier = Modifier
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = horizontalPadding),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             val isDateSort = sortMode == SortMode.DATE_DESC || sortMode == SortMode.DATE_ASC
@@ -45,7 +48,7 @@ fun SearchAndSortHeader(
             )
 
             val isTitleSort = sortMode == SortMode.TITLE_AZ || sortMode == SortMode.TITLE_ZA
-            val titleLabel = if (sortMode == SortMode.TITLE_ZA) "Z ? A" else "A ? Z"
+            val titleLabel = if (sortMode == SortMode.TITLE_ZA) "Z -> A" else "A -> Z"
             FilterChip(
                 selected = isTitleSort,
                 onClick = {
@@ -73,7 +76,7 @@ fun SearchAndSortHeader(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = onSearchQueryChange,
-                placeholder = { Text("Search ideas or folders...") },
+                placeholder = { Text(searchPlaceholder) },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 trailingIcon = {
                     IconButton(onClick = {
@@ -85,7 +88,7 @@ fun SearchAndSortHeader(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = horizontalPadding, vertical = 8.dp),
                 singleLine = true
             )
         }

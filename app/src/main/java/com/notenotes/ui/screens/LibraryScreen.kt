@@ -1219,10 +1219,10 @@ fun LibraryScreen(
                         subtitle = if (searchQuery.isBlank()) "Record your first melody!" else null
                     )
                 } else {
-                    DragSelectLazyColumn<Long>(
+                    DragSelectLazyColumn(
                         listState = listState,
                         haptic = haptic,
-                        onKeySelected = { viewModel.addToSelection(it) }
+                        onKeySelected = { key -> (key as? Long)?.let { viewModel.addToSelection(it) } }
                     ) {
                         if (sortMode == SortMode.RECENT) {
                             // Flat recent list across groups.

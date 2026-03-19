@@ -17,10 +17,10 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
 @Composable
-fun <K : Any> DragSelectLazyColumn(
+fun DragSelectLazyColumn(
     listState: LazyListState,
     haptic: HapticFeedback,
-    onKeySelected: (K) -> Unit,
+    onKeySelected: (Any) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
     verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(8.dp),
@@ -28,7 +28,7 @@ fun <K : Any> DragSelectLazyColumn(
 ) {
     var isDragSelecting by remember { mutableStateOf(false) }
     var currentDragY by remember { mutableStateOf(0f) }
-    val dragVisited = remember { mutableSetOf<K>() }
+    val dragVisited = remember { mutableSetOf<Any>() }
 
     LaunchedEffect(isDragSelecting) {
         if (!isDragSelecting) return@LaunchedEffect
@@ -43,10 +43,9 @@ fun <K : Any> DragSelectLazyColumn(
             }
             if (scrollAmount != 0f) {
                 listState.scrollBy(scrollAmount)
-                @Suppress("UNCHECKED_CAST")
-                val hitKey = listState.layoutInfo.visibleItemsInfo
+                                val hitKey = listState.layoutInfo.visibleItemsInfo
                     .firstOrNull { y >= it.offset && y < it.offset + it.size }
-                    ?.key as? K
+                    ?.key
                 if (hitKey != null && dragVisited.add(hitKey)) {
                     onKeySelected(hitKey)
                 }
@@ -68,10 +67,9 @@ fun <K : Any> DragSelectLazyColumn(
                         dragVisited.clear()
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
 
-                        @Suppress("UNCHECKED_CAST")
-                        val hitKey = listState.layoutInfo.visibleItemsInfo
+                                                val hitKey = listState.layoutInfo.visibleItemsInfo
                             .firstOrNull { offset.y >= it.offset && offset.y < it.offset + it.size }
-                            ?.key as? K
+                            ?.key
                         if (hitKey != null && dragVisited.add(hitKey)) {
                             onKeySelected(hitKey)
                         }
@@ -79,10 +77,9 @@ fun <K : Any> DragSelectLazyColumn(
                     onDrag = { change, _ ->
                         change.consume()
                         currentDragY = change.position.y
-                        @Suppress("UNCHECKED_CAST")
-                        val hitKey = listState.layoutInfo.visibleItemsInfo
+                                                val hitKey = listState.layoutInfo.visibleItemsInfo
                             .firstOrNull { currentDragY >= it.offset && currentDragY < it.offset + it.size }
-                            ?.key as? K
+                            ?.key
                         if (hitKey != null && dragVisited.add(hitKey)) {
                             onKeySelected(hitKey)
                         }

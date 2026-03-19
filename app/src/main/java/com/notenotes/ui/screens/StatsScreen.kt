@@ -527,13 +527,15 @@ AlertDialog(
                     isSearchExpanded = true,
                     onSearchExpandedChange = { },
                     sortMode = sortMode,
-                    onSortModeChange = { sortMode = it }
+                    onSortModeChange = { sortMode = it },
+                    horizontalPadding = 0.dp,
+                    searchPlaceholder = "Search groups or ideas"
                 )
 
-                DragSelectLazyColumn<String>(
+                DragSelectLazyColumn(
                     listState = listState,
                     haptic = androidx.compose.ui.platform.LocalHapticFeedback.current,
-                    onKeySelected = { toggleByRowKey(it) },
+                    onKeySelected = { key -> (key as? String)?.let { toggleByRowKey(it) } },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 340.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     contentPadding = PaddingValues(0.dp)
