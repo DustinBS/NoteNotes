@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -55,6 +56,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.notenotes.ui.components.SearchAndSortHeader
+import com.notenotes.ui.components.DragSelectLazyColumn
+import com.notenotes.ui.components.SortMode
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
@@ -208,11 +212,7 @@ private sealed interface ScopeRow {
     data class Idea(val idea: MelodyIdea) : ScopeRow
 }
 
-private enum class StatsSortMode {
-    DATE,
-    TITLE,
-    RECENT
-}
+
 
 private const val GROUP_UNGROUPED = "__ungrouped__"
 
@@ -410,10 +410,8 @@ private fun StatsScopeSelectorDialog(
     onApply: (Set<Long>) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
-    var sortMode by remember { mutableStateOf(StatsSortMode.DATE) }
-    var dateAscending by remember { mutableStateOf(false) }
-    var titleDescending by remember { mutableStateOf(false) }
-    var localSelection by remember(initiallySelectedIdeaIds) { mutableStateOf(initiallySelectedIdeaIds) }
+    var sortMode by remember { mutableStateOf(SortMode.DATE_DESC) }
+        var localSelection by remember(initiallySelectedIdeaIds) { mutableStateOf(initiallySelectedIdeaIds) }
 
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     var previousSortMode by remember { mutableStateOf(sortMode) }
@@ -424,11 +422,7 @@ private fun StatsScopeSelectorDialog(
         }
     }
 
-    var isDragSelecting by remember { mutableStateOf(false) }
-    var currentDragY by remember { mutableStateOf(0f) }
-    val dragVisited = remember { mutableSetOf<String>() }
-
-    fun sortedIdeas(input: List<MelodyIdea>): List<MelodyIdea> {
+fun sortedIdeas(input: List<MelodyIdea>): List<MelodyIdea> {
         val filtered = input.filter {
             query.isBlank() ||
                 it.title.contains(query, ignoreCase = true) ||
@@ -436,15 +430,11 @@ private fun StatsScopeSelectorDialog(
                 formatStatsDate(it.createdAt).contains(query, ignoreCase = true)
         }
         return when (sortMode) {
-            StatsSortMode.DATE -> {
-                if (dateAscending) filtered.sortedBy { it.createdAt }
-                else filtered.sortedByDescending { it.createdAt }
-            }
-            StatsSortMode.TITLE -> {
-                if (titleDescending) filtered.sortedByDescending { it.title.lowercase() }
-                else filtered.sortedBy { it.title.lowercase() }
-            }
-            StatsSortMode.RECENT -> filtered.sortedByDescending { it.lastOpenedAt ?: 0L }
+            SortMode.DATE_DESC -> filtered.sortedByDescending { it.createdAt }
+            SortMode.DATE_ASC -> filtered.sortedBy { it.createdAt }
+            SortMode.TITLE_AZ -> filtered.sortedBy { it.title.lowercase() }
+            SortMode.TITLE_ZA -> filtered.sortedByDescending { it.title.lowercase() }
+            SortMode.RECENT -> filtered.sortedByDescending { it.lastOpenedAt ?: 0L }
         }
     }
 
@@ -459,7 +449,7 @@ private fun StatsScopeSelectorDialog(
             .sortedBy { it.label.lowercase() }
     }
 
-    val shownGroups = remember(groups, query, sortMode, dateAscending, titleDescending) {
+    val shownGroups = remember(groups, query, sortMode) {
         groups.mapNotNull { group ->
             val groupMatches = query.isBlank() || group.label.contains(query, ignoreCase = true)
             val ideasForGroup = if (groupMatches) sortedIdeas(group.ideas) else sortedIdeas(group.ideas)
@@ -471,12 +461,12 @@ private fun StatsScopeSelectorDialog(
         }
     }
 
-    val sortedVisibleIdeas = remember(ideas, query, sortMode, dateAscending, titleDescending) {
+    val sortedVisibleIdeas = remember(ideas, query, sortMode) {
         sortedIdeas(ideas)
     }
 
     val rows = remember(shownGroups, sortedVisibleIdeas, sortMode) {
-        if (sortMode == StatsSortMode.RECENT) {
+        if (sortMode == SortMode.RECENT) {
             sortedVisibleIdeas.map<MelodyIdea, ScopeRow> { idea -> ScopeRow.Idea(idea) }
         } else {
             buildList<ScopeRow> {
@@ -521,32 +511,7 @@ private fun StatsScopeSelectorDialog(
         }
     }
 
-    // Auto-scroll while drag-selecting near top/bottom edges.
-    LaunchedEffect(isDragSelecting) {
-        if (!isDragSelecting) return@LaunchedEffect
-        val edgeZone = 120f
-        while (isDragSelecting) {
-            val y = currentDragY
-            val viewportHeight = listState.layoutInfo.viewportSize.height.toFloat()
-            val scrollAmount = when {
-                y < edgeZone -> -(edgeZone - y) / edgeZone * 22f
-                y > viewportHeight - edgeZone -> (y - viewportHeight + edgeZone) / edgeZone * 22f
-                else -> 0f
-            }
-            if (scrollAmount != 0f) {
-                listState.scrollBy(scrollAmount)
-                val hitKey = listState.layoutInfo.visibleItemsInfo
-                    .firstOrNull { y >= it.offset && y < it.offset + it.size }
-                    ?.key as? String
-                if (hitKey != null && dragVisited.add(hitKey)) {
-                    toggleByRowKey(hitKey)
-                }
-            }
-            kotlinx.coroutines.delay(16)
-        }
-    }
-
-    AlertDialog(
+AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Select Groups & Ideas") },
         text = {
@@ -556,87 +521,22 @@ private fun StatsScopeSelectorDialog(
                     .heightIn(max = 560.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("Search groups or ideas") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                SearchAndSortHeader(
+                    searchQuery = query,
+                    onSearchQueryChange = { query = it },
+                    isSearchExpanded = true,
+                    onSearchExpandedChange = { },
+                    sortMode = sortMode,
+                    onSortModeChange = { sortMode = it }
                 )
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    val dateLabel = if (dateAscending) "Oldest" else "Newest"
-                    FilterChip(
-                        selected = sortMode == StatsSortMode.DATE,
-                        onClick = {
-                            if (sortMode == StatsSortMode.DATE) dateAscending = !dateAscending
-                            else sortMode = StatsSortMode.DATE
-                        },
-                        label = { Text(dateLabel) }
-                    )
-
-                    val titleLabel = if (titleDescending) "Z -> A" else "A -> Z"
-                    FilterChip(
-                        selected = sortMode == StatsSortMode.TITLE,
-                        onClick = {
-                            if (sortMode == StatsSortMode.TITLE) titleDescending = !titleDescending
-                            else sortMode = StatsSortMode.TITLE
-                        },
-                        label = { Text(titleLabel) }
-                    )
-
-                    FilterChip(
-                        selected = sortMode == StatsSortMode.RECENT,
-                        onClick = { sortMode = StatsSortMode.RECENT },
-                        label = { Text("Recent") }
-                    )
-                }
-
-                androidx.compose.foundation.lazy.LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 120.dp, max = 340.dp)
-                        .pointerInput(Unit) {
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = { offset ->
-                                    isDragSelecting = true
-                                    currentDragY = offset.y
-                                    dragVisited.clear()
-                                    val hitKey = listState.layoutInfo.visibleItemsInfo
-                                        .firstOrNull { offset.y >= it.offset && offset.y < it.offset + it.size }
-                                        ?.key as? String
-                                    if (hitKey != null && dragVisited.add(hitKey)) {
-                                        toggleByRowKey(hitKey)
-                                    }
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    currentDragY = change.position.y
-                                    val hitKey = listState.layoutInfo.visibleItemsInfo
-                                        .firstOrNull { currentDragY >= it.offset && currentDragY < it.offset + it.size }
-                                        ?.key as? String
-                                    if (hitKey != null && dragVisited.add(hitKey)) {
-                                        toggleByRowKey(hitKey)
-                                    }
-                                },
-                                onDragEnd = {
-                                    isDragSelecting = false
-                                    dragVisited.clear()
-                                },
-                                onDragCancel = {
-                                    isDragSelecting = false
-                                    dragVisited.clear()
-                                }
-                            )
-                        },
-                    userScrollEnabled = !isDragSelecting,
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                DragSelectLazyColumn<String>(
+                    listState = listState,
+                    haptic = androidx.compose.ui.platform.LocalHapticFeedback.current,
+                    onKeySelected = { toggleByRowKey(it) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 340.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(0.dp)
                 ) {
                     items(rows, key = { row -> rowKey(row) }) { row ->
                         when (row) {
@@ -713,14 +613,14 @@ private fun StatsScopeSelectorDialog(
                                 Surface(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(start = if (sortMode == StatsSortMode.RECENT) 0.dp else 18.dp)
+                                        .padding(start = if (sortMode == SortMode.RECENT) 0.dp else 18.dp)
                                         .clickable { toggleIdea(row.idea.id) },
                                     shape = RoundedCornerShape(10.dp),
                                     color = if (selected) MaterialTheme.colorScheme.primaryContainer
                                     else groupColor.copy(alpha = 0.14f),
                                     tonalElevation = if (selected) 2.dp else 0.dp
                                 ) {
-                                    if (sortMode == StatsSortMode.RECENT) {
+                                    if (sortMode == SortMode.RECENT) {
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()

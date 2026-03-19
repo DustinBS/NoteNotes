@@ -28,6 +28,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.notenotes.ui.components.SearchAndSortHeader
+import com.notenotes.ui.components.DragSelectLazyColumn
+import com.notenotes.ui.components.SortMode
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -115,14 +118,6 @@ private fun pickRandomColor(existingArgbs: Collection<Int>): Color {
 }
 
 // ──────────────────────── Sort Modes ────────────────────────
-
-enum class SortMode(val label: String) {
-    DATE_DESC("Newest"),
-    DATE_ASC("Oldest"),
-    TITLE_AZ("A → Z"),
-    TITLE_ZA("Z → A"),
-    RECENT("Recent")
-}
 
 // ──────────────────────────── ViewModel ────────────────────────────
 
@@ -1207,73 +1202,15 @@ fun LibraryScreen(
                 }
             } else {
                 // ── Active library ──
-                // Sort chips with direction toggles + recent.
-                Row(
-                    modifier = Modifier
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val isDateSort = sortMode == SortMode.DATE_DESC || sortMode == SortMode.DATE_ASC
-                    val dateLabel = if (sortMode == SortMode.DATE_ASC) "Oldest" else "Newest"
-                    FilterChip(
-                        selected = isDateSort,
-                        onClick = {
-                            viewModel.setSortMode(
-                                if (sortMode == SortMode.DATE_DESC) SortMode.DATE_ASC else SortMode.DATE_DESC
-                            )
-                        },
-                        label = { Text(dateLabel) },
-                        leadingIcon = if (isDateSort) {
-                            { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
-                        } else null
-                    )
-
-                    val isTitleSort = sortMode == SortMode.TITLE_AZ || sortMode == SortMode.TITLE_ZA
-                    val titleLabel = if (sortMode == SortMode.TITLE_ZA) "Z → A" else "A → Z"
-                    FilterChip(
-                        selected = isTitleSort,
-                        onClick = {
-                            viewModel.setSortMode(
-                                if (sortMode == SortMode.TITLE_AZ) SortMode.TITLE_ZA else SortMode.TITLE_AZ
-                            )
-                        },
-                        label = { Text(titleLabel) },
-                        leadingIcon = if (isTitleSort) {
-                            { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
-                        } else null
-                    )
-
-                    FilterChip(
-                        selected = sortMode == SortMode.RECENT,
-                        onClick = { viewModel.setSortMode(SortMode.RECENT) },
-                        label = { Text("Recent") },
-                        leadingIcon = if (sortMode == SortMode.RECENT) {
-                            { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
-                        } else null
-                    )
-                }
-                if (isSearchExpanded) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { viewModel.setSearchQuery(it) },
-                        placeholder = { Text("Search ideas or folders...") },
-                        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                        trailingIcon = {
-                            IconButton(onClick = {
-                                viewModel.setSearchQuery("")
-                                isSearchExpanded = false
-                            }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Close search")
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        singleLine = true
-                    )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
+                SearchAndSortHeader(
+                    searchQuery = searchQuery,
+                    onSearchQueryChange = { viewModel.setSearchQuery(it) },
+                    isSearchExpanded = isSearchExpanded,
+                    onSearchExpandedChange = { isSearchExpanded = it },
+                    sortMode = sortMode,
+                    onSortModeChange = { viewModel.setSortMode(it) }
+                  )
+                  Spacer(modifier = Modifier.height(4.dp))
 
                 if (filteredIdeas.isEmpty()) {
                     EmptyState(
@@ -1282,77 +1219,10 @@ fun LibraryScreen(
                         subtitle = if (searchQuery.isBlank()) "Record your first melody!" else null
                     )
                 } else {
-                    var isDragSelecting by remember { mutableStateOf(false) }
-                    var currentDragY by remember { mutableStateOf(0f) }
-                    val dragVisited = remember { mutableSetOf<Long>() }
-
-                    // Auto-scroll while drag-selecting near list edges.
-                    LaunchedEffect(isDragSelecting) {
-                        if (!isDragSelecting) return@LaunchedEffect
-                        val edgeZone = 120f
-                        while (isDragSelecting) {
-                            val y = currentDragY
-                            val viewportHeight = listState.layoutInfo.viewportSize.height.toFloat()
-                            val scrollAmount = when {
-                                y < edgeZone -> -(edgeZone - y) / edgeZone * 25f
-                                y > viewportHeight - edgeZone -> (y - viewportHeight + edgeZone) / edgeZone * 25f
-                                else -> 0f
-                            }
-                            if (scrollAmount != 0f) {
-                                listState.scrollBy(scrollAmount)
-                                val hitKey = listState.layoutInfo.visibleItemsInfo
-                                    .firstOrNull { y >= it.offset && y < it.offset + it.size }
-                                    ?.key as? Long
-                                if (hitKey != null && dragVisited.add(hitKey)) {
-                                    viewModel.addToSelection(hitKey)
-                                }
-                            }
-                            delay(16)
-                        }
-                    }
-
-                    LazyColumn(
-                        state = listState,
-                        userScrollEnabled = !isDragSelecting,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(Unit) {
-                                detectDragGesturesAfterLongPress(
-                                    onDragStart = { offset ->
-                                        isDragSelecting = true
-                                        currentDragY = offset.y
-                                        dragVisited.clear()
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-
-                                        val hitKey = listState.layoutInfo.visibleItemsInfo
-                                            .firstOrNull { offset.y >= it.offset && offset.y < it.offset + it.size }
-                                            ?.key as? Long
-                                        if (hitKey != null && dragVisited.add(hitKey)) {
-                                            viewModel.addToSelection(hitKey)
-                                        }
-                                    },
-                                    onDrag = { change, _ ->
-                                        change.consume()
-                                        currentDragY = change.position.y
-                                        val hitKey = listState.layoutInfo.visibleItemsInfo
-                                            .firstOrNull { currentDragY >= it.offset && currentDragY < it.offset + it.size }
-                                            ?.key as? Long
-                                        if (hitKey != null && dragVisited.add(hitKey)) {
-                                            viewModel.addToSelection(hitKey)
-                                        }
-                                    },
-                                    onDragEnd = {
-                                        isDragSelecting = false
-                                        dragVisited.clear()
-                                    },
-                                    onDragCancel = {
-                                        isDragSelecting = false
-                                        dragVisited.clear()
-                                    }
-                                )
-                            },
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    DragSelectLazyColumn<Long>(
+                        listState = listState,
+                        haptic = haptic,
+                        onKeySelected = { viewModel.addToSelection(it) }
                     ) {
                         if (sortMode == SortMode.RECENT) {
                             // Flat recent list across groups.
@@ -2148,3 +2018,4 @@ private fun ColorWheelPickerDialog(
         }
     )
 }
+
