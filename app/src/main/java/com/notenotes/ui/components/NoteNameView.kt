@@ -265,7 +265,7 @@ private fun NoteNameChip(
                 fontWeight = FontWeight.Medium
             )
         } else {
-            val displayText = buildPitchFretAnnotated(note)
+            val displayText = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotated(note)
             Text(
                 text = displayText,
                 fontSize = 12.sp,
@@ -321,14 +321,14 @@ private fun NoteNameRow(
         } else if (note.isChord) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = buildPitchFretAnnotated(note),
+                    text = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotated(note),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold
                 )
             }
         } else {
             Text(
-                text = buildPitchFretAnnotated(note),
+                text = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotated(note),
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
@@ -393,34 +393,7 @@ private fun durationSeconds(note: MusicalNote, tempoBpm: Int): Float {
     return note.durationTicks.coerceAtLeast(0) * tickDurationSec
 }
 
-private fun buildPitchEntries(note: MusicalNote): List<Triple<Int, Int, Int>> {
-    val entries = mutableListOf<Triple<Int, Int, Int>>()
-    for (i in note.pitches.indices) {
-        val pitch = note.pitches[i]
-        val sf = note.tabPositions.getOrNull(i) ?: Pair(0, 0)
-        entries.add(Triple(pitch, sf.first, sf.second))
-    }
-    return entries.sortedBy { it.first }
-}
 
-private fun buildPitchFretAnnotated(note: MusicalNote) = buildAnnotatedString {
-    val entries = buildPitchEntries(note)
-    entries.forEachIndexed { idx, (pitch, stringIndex, fret) ->
-        val stringColor = if (stringIndex in GuitarUtils.STRINGS.indices)
-            Color(GuitarUtils.STRINGS[stringIndex].colorArgb)
-        else Color.Unspecified
-
-        withStyle(SpanStyle(color = stringColor, fontWeight = FontWeight.SemiBold)) {
-            append(midiToDisplayName(pitch))
-        }
-        if (!note.isRest && (note.isChord || note.hasTab)) {
-            withStyle(SpanStyle(color = stringColor, fontSize = 8.sp, baselineShift = BaselineShift.Superscript)) {
-                append(fret.toString())
-            }
-        }
-        if (idx != entries.lastIndex) append(" ")
-    }
-}
 
 /**
  * Get a user-friendly duration symbol/abbreviation.

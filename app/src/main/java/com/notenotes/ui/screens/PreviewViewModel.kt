@@ -475,6 +475,13 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val sortedNotes = recalculateNoteDurations(currentNotes, tempoBpm, durationMs)
         updateNotesAndRefresh(sortedNotes)
 
+        val newNoteIndex = sortedNotes.indexOfFirst {
+            it.timePositionMs == newNote.timePositionMs && it.pitches == newNote.pitches
+        }
+        if (newNoteIndex != -1) {
+            _selectedNoteIndex.value = newNoteIndex
+        }
+
         Log.i(TAG, "addNote: Added ${com.notenotes.util.PitchUtils.midiToNoteName(primaryMidi)} " +
             "(MIDI $primaryMidi, string=$primaryString, fret=$primaryFret) at ${String.format("%.0f", cursorTimeMs)}ms")
 

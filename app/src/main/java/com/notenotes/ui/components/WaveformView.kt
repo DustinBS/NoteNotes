@@ -83,7 +83,7 @@ data class WaveformData(
  * Represents a note overlay item positioned on the waveform timeline.
  */
 data class NoteOverlayItem(
-    val label: String,          // e.g., "C4", "Am"
+    val label: androidx.compose.ui.text.AnnotatedString,          // e.g., "C4", "Am"
     val startFraction: Float,   // 0.0–1.0 position along GLOBAL timeline
     val endFraction: Float,
     val pitches: List<Int>,
@@ -532,16 +532,7 @@ private fun computeNoteOverlays(
         val startFraction = (noteStartSec / durationSec).coerceIn(0f, 1f)
         val endFraction = ((noteStartSec + noteDurationSec) / durationSec).coerceIn(0f, 1f)
 
-        val label = if (note.isChord) {
-            note.allPitches.joinToString(" ") { pitch -> PitchUtils.midiToNoteName(pitch) }
-        } else {
-            val primaryPitch = note.pitches.firstOrNull() ?: 0
-            PitchUtils.midiToNoteName(primaryPitch)
-        }
-
-        val tabLabel = if (note.hasTab) {
-            note.tabPositions.joinToString(", ") { "S${it.first + 1} F${it.second}" }
-        } else null
+        val label = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotated(note) 
 
         overlays.add(NoteOverlayItem(
             label = label,
@@ -550,7 +541,7 @@ private fun computeNoteOverlays(
             pitches = note.pitches,
             noteIndex = noteIndex,
             hasTab = note.hasTab,
-            tabLabel = tabLabel
+            tabLabel = null
         ))
 
         currentTimeSec = noteStartSec + noteDurationSec

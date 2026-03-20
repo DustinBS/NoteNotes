@@ -25,6 +25,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.notenotes.util.GuitarUtils
 import com.notenotes.util.PitchUtils
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.window.Dialog
+import com.notenotes.utils.NoteTextUtils
 
 /**
  * Represents a single note being built in the editor.
@@ -176,31 +181,20 @@ fun NoteEditorPanel(
                         OutlinedButton(
                             onClick = { showCopyFromMenu = true },
                             modifier = Modifier.fillMaxWidth(),
-                            enabled = hasSelectedNote,
+                            enabled = true,
                             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
                         ) {
                             Text("Copy From", fontSize = 11.sp, maxLines = 1)
                         }
 
-                        DropdownMenu(
-                            expanded = showCopyFromMenu,
-                            onDismissRequest = { showCopyFromMenu = false }
-                        ) {
-                            allNotes.forEachIndexed { idx, note ->
-                                if (selectedNoteIndex != null && idx == selectedNoteIndex) return@forEachIndexed
-                                val noteLabel = if (note.isChord) {
-                                    note.pitches.joinToString(" ") { pitch -> PitchUtils.midiToNoteName(pitch) }
-                                } else {
-                                    PitchUtils.midiToNoteName(note.pitches.firstOrNull() ?: 0)
-                                }
-                                DropdownMenuItem(
-                                    text = { Text("#${idx + 1} $noteLabel") },
-                                    onClick = {
-                                        onCopyFromNote(idx)
-                                        showCopyFromMenu = false
-                                    }
-                                )
-                            }
+                        if (showCopyFromMenu) {
+                            CopyFromDialog(
+                                allNotes = allNotes,
+                                selectedNoteIndex = selectedNoteIndex,
+                                timePointSeconds = timePointSeconds,
+                                onDismissRequest = { showCopyFromMenu = false },
+                                onCopyFromNote = onCopyFromNote
+                            )
                         }
                     }
                 }
@@ -265,3 +259,125 @@ fun NoteEditorPanel(
         }
     }
 }
+
+@Composable
+fun CopyFromDialog(
+    allNotes: List<com.notenotes.model.MusicalNote>,
+    selectedNoteIndex: Int?,
+    timePointSeconds: Float,
+    onDismissRequest: () -> Unit,
+    onCopyFromNote: (Int) -> Unit
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    
+    val distinctNotes = remember(allNotes, selectedNoteIndex) {
+        val groups = linkedMapOf<String, Int>()
+        allNotes.forEachIndexed { idx, note ->
+            if (selectedNoteIndex == null || idx != selectedNoteIndex) {
+                // Ignore empty rest notes
+                if (!note.isRest && note.pitches.isNotEmpty()) {
+                    val key = note.pitches.joinToString(",") + "|" + note.tabPositions.joinToString(",") { "${it.first}-${it.second}" }
+                    if (!groups.containsKey(key)) {
+                        groups[key] = idx
+                    }
+                }
+            }
+        }
+        groups.map { it.value } // Return the original indices
+    }
+    
+    val filteredIndices = remember(distinctNotes, searchQuery) {
+        if (searchQuery.isBlank()) distinctNotes
+        else distinctNotes.filter { idx -> 
+            val note = allNotes[idx]
+            val noteLabel = NoteTextUtils.buildPitchFretAnnotated(note).text
+            noteLabel.contains(searchQuery, ignoreCase = true)
+        }
+    }
+    
+    val listState = rememberLazyListState()
+    
+    LaunchedEffect(Unit) {
+        // Find previous note index
+        val prevIdx = if (selectedNoteIndex != null && selectedNoteIndex > 0) {
+            selectedNoteIndex - 1
+        } else if (selectedNoteIndex == null) {
+            // Find note right before cursor
+            val timeMs = timePointSeconds * 1000f
+            // We assume notes are chronological. But timePositionMs can be null.
+            var lastIdx = -1
+            var accumulated = 0f
+            // Let us just find the last note whose start time is before timeMs
+            for (i in allNotes.indices) {
+                val note = allNotes[i]
+                val t = note.timePositionMs?.toFloat() ?: accumulated
+                if (t <= timeMs) {
+                    lastIdx = i
+                } else {
+                    break
+                }
+                accumulated = t + (note.durationTicks * (60f / 120f) * 1000f / 4f) // Rough estimate
+            }
+            if (lastIdx >= 0) lastIdx else null
+        } else {
+            null
+        }
+        
+        if (prevIdx != null && prevIdx >= 0 && prevIdx < allNotes.size) {
+            val note = allNotes[prevIdx]
+            val key = note.pitches.joinToString(",") + "|" + note.tabPositions.joinToString(",") { "${it.first}-${it.second}" }
+            
+            // Find in filtered list
+            val targetIdxInFiltered = filteredIndices.indexOfFirst {
+                val n = allNotes[it]
+                val k = n.pitches.joinToString(",") + "|" + n.tabPositions.joinToString(",") { p -> "${p.first}-${p.second}" }
+                k == key
+            }
+            if (targetIdxInFiltered >= 0) {
+                listState.scrollToItem(targetIdxInFiltered)
+            }
+        }
+    }
+
+    Dialog(onDismissRequest = onDismissRequest) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 4.dp
+        ) {
+            Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
+                Text("Copy Chord", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search chords...") },
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp)
+                ) {
+                    itemsIndexed(filteredIndices) { _, originalIdx ->
+                        val note = allNotes[originalIdx]
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onCopyFromNote(originalIdx)
+                                    onDismissRequest()
+                                }
+                                .padding(vertical = 12.dp, horizontal = 8.dp)
+                        ) {
+                            Text(NoteTextUtils.buildPitchFretAnnotated(note))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
