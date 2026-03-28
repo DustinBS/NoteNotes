@@ -21,12 +21,38 @@ class AudioPlayer {
 
     private var mediaPlayer: MediaPlayer? = null
     private var progressJob: Job? = null
+    private var currentSpeed = 1f
     private val playerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val _state = MutableStateFlow(PlaybackState.IDLE)
     val state: StateFlow<PlaybackState> = _state
 
     private val _progress = MutableStateFlow(0f)
     val progress: StateFlow<Float> = _progress
+
+    /**
+     * Load an audio file without playing it immediately.
+     */
+    fun load(file: File) {
+        stop()
+        try {
+            Log.i(TAG, "AudioPlayer.load: ${file.absolutePath}")
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(file.absolutePath)
+                prepare()
+                try { mediaPlayer?.let { player -> player.playbackParams = player.playbackParams.setSpeed(currentSpeed) } } catch (e:Exception) {}
+                setOnCompletionListener {
+                    Log.d(TAG, "AudioPlayer: Playback completed")
+                    stopProgressPolling()
+                    _state.value = PlaybackState.IDLE
+                    _progress.value = 1.0f
+                }
+            }
+            _state.value = PlaybackState.PAUSED
+        } catch (e: Exception) {
+            Log.e(TAG, "AudioPlayer.load: Error", e)
+            _state.value = PlaybackState.IDLE
+        }
+    }
 
     /**
      * Load and play an audio file.
@@ -38,11 +64,12 @@ class AudioPlayer {
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(file.absolutePath)
                 prepare()
+                try { mediaPlayer?.let { player -> player.playbackParams = player.playbackParams.setSpeed(currentSpeed) } } catch (e:Exception) {}
                 setOnCompletionListener {
                     Log.d(TAG, "AudioPlayer: Playback completed")
                     stopProgressPolling()
                     _state.value = PlaybackState.IDLE
-                    _progress.value = 0f
+                    _progress.value = 1.0f
                 }
                 start()
             }
@@ -155,6 +182,7 @@ class AudioPlayer {
     fun setPlaybackSpeed(speed: Float) {
         mediaPlayer?.let {
             try {
+                currentSpeed = speed
                 val params = it.playbackParams.setSpeed(speed)
                 it.playbackParams = params
                 Log.d(TAG, "AudioPlayer: Speed set to ${speed}x")

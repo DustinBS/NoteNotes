@@ -60,6 +60,21 @@ class AudioRecorder(private val context: Context) {
 
     // Use a list of ShortArray chunks to avoid boxing overhead of MutableList<Short>
     private var rawChunks = mutableListOf<ShortArray>()
+
+    fun getLiveSamples(): ShortArray {
+        synchronized(rawChunks) {
+            var size = 0
+            for (c in rawChunks) size += c.size
+            val out = ShortArray(size)
+            var offset = 0
+            for (c in rawChunks) {
+                System.arraycopy(c, 0, out, offset, c.size)
+                offset += c.size
+            }
+            return out
+        }
+    }
+
     private var totalSamples = 0
 
     // Ring buffer for real-time pitch detection

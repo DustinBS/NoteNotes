@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.notenotes.audio.AudioPlayer
 import com.notenotes.ui.components.NoteNameView
@@ -46,6 +47,7 @@ fun PreviewScreen(
     ideaId: Long,
     onNavigateBack: () -> Unit,
     onNavigateToSettings: (() -> Unit)? = null,
+    onNavigateToRerecord: ((Long) -> Unit)? = null,
     viewModel: PreviewViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -639,6 +641,13 @@ fun PreviewScreen(
                 actions = {
                     var showMenu by remember { mutableStateOf(false) }
                     var selectedAlgorithm by remember { mutableStateOf(PitchAlgorithm.DEFAULT) }
+
+                    IconButton(onClick = { runGuardedAction { onNavigateToRerecord?.invoke(ideaId) } }) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Filled.Mic, contentDescription = "Edit Audio", modifier = Modifier.size(20.dp))
+                            Text("Edit", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+                        }
+                    }
 
                     Box {
                         IconButton(onClick = { runGuardedAction { showMenu = true } }) {

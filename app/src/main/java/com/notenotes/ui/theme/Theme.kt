@@ -13,6 +13,9 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 // Music-themed colors
+val EditCursorColor = Color.White
+val PlayheadCursorColor = Color(0xFFC43B3B)
+
 val MusicPurple = Color(0xFF6B4EAB)
 val MusicPurpleLight = Color(0xFF9D7FD8)
 val MusicPurpleDark = Color(0xFF3D2578)

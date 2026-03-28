@@ -4,7 +4,9 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.notenotes.audio.AudioPlayer
 import com.notenotes.audio.AudioRecorder
+import com.notenotes.audio.WavReader
 import com.notenotes.audio.WavWriter
 import com.notenotes.data.AppDatabase
 import com.notenotes.export.MidiWriter
@@ -13,6 +15,7 @@ import com.notenotes.model.InstrumentProfile
 import com.notenotes.model.MelodyIdea
 import com.notenotes.model.TranscriptionResult
 import com.notenotes.processing.TranscriptionPipeline
+import com.notenotes.ui.components.WaveformData
 import com.notenotes.util.TranspositionUtils
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
@@ -31,7 +34,7 @@ private const val KEY_AUTO_TRANSCRIBE = "auto_transcribe"
 class RecordViewModel(application: Application) : AndroidViewModel(application) {
 
     enum class UiState {
-        IDLE, RECORDING, PROCESSING, DONE, ERROR
+        IDLE, RECORDING, PAUSED, RECORDING_FINISHED, PROCESSING, DONE, ERROR
     }
 
     private val context = application.applicationContext
@@ -61,31 +64,180 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _autoTranscribe = MutableStateFlow(prefs.getBoolean(KEY_AUTO_TRANSCRIBE, true))
     val autoTranscribe: StateFlow<Boolean> = _autoTranscribe
+    
+    private val _waveformWindowSize = MutableStateFlow(prefs.getFloat("waveform_window_size", 5f))
+    val waveformWindowSize: StateFlow<Float> = _waveformWindowSize
+
+    // Punch-in recording / playback state
+    private var baseAudioBuffer: ShortArray? = null
+    private var loadedIdeaId: Long? = null
+    private val _punchInPositionMs = MutableStateFlow<Long>(0L)
+    val punchInPositionMs: StateFlow<Long> = _punchInPositionMs
+    val isSynced = MutableStateFlow(true)
+    fun toggleSync() { isSynced.value = !isSynced.value }
+    private var activePunchInMs = 0L
+
+    private val audioPlayer = AudioPlayer()
+    val playbackState = audioPlayer.state
+    val playbackProgress = audioPlayer.progress
+
+    private val _waveformData = MutableStateFlow<WaveformData?>(null)
+    val waveformData: StateFlow<WaveformData?> = _waveformData
+    
+    private val _loadedIdea = MutableStateFlow<MelodyIdea?>(null)
+    val loadedIdea: StateFlow<MelodyIdea?> = _loadedIdea
+
+    private val _isChanged = MutableStateFlow(false)
+    val isChanged: StateFlow<Boolean> = _isChanged
 
     // Listen for SharedPreferences changes (e.g. from SettingsScreen)
     private val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == KEY_AUTO_TRANSCRIBE) {
             _autoTranscribe.value = prefs.getBoolean(KEY_AUTO_TRANSCRIBE, true)
+        } else if (key == "waveform_window_size") {
+            _waveformWindowSize.value = prefs.getFloat("waveform_window_size", 5f)
         }
     }
 
     init {
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        viewModelScope.launch {
+            audioPlayer.progress.collect { prog ->
+                if (isSynced.value && audioPlayer.state.value != com.notenotes.audio.AudioPlayer.PlaybackState.IDLE || prog == 1.0f) {
+                    if (isSynced.value) {
+                        val ms = getCurrentTrackDurationMs()
+                        _punchInPositionMs.value = (prog * ms.toFloat()).toLong()
+                    }
+                }
+            }
+        }
     }
 
     override fun onCleared() {
         super.onCleared()
         prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
+        audioPlayer.release()
     }
 
     private val _recordingDuration = MutableStateFlow(0.0)
     val recordingDuration: StateFlow<Double> = _recordingDuration
 
+    private val _recordHeadFraction = MutableStateFlow(0f)
+    val recordHeadFraction: StateFlow<Float> = _recordHeadFraction
+
     val amplitudeLevel = audioRecorder.amplitudeLevel
     val recordingState = audioRecorder.state
     val livePitch = audioRecorder.livePitch
 
+
+    private fun getBufferDurationMs(size: Int): Long {
+        return (size.toDouble() / com.notenotes.audio.AudioRecorder.SAMPLE_RATE * 1000).toLong()
+    }
+
+    private fun getCurrentTrackDurationMs(): Long {
+        return baseAudioBuffer?.let { getBufferDurationMs(it.size) } ?: audioPlayer.getDurationMs().toLong()
+    }
     private var rawSamples: ShortArray? = null
+
+    // --- Playback and Punch-In Logic ---
+    
+    fun play() {
+        val samples = baseAudioBuffer
+        if (samples != null) {
+            if (audioPlayer.state.value == com.notenotes.audio.AudioPlayer.PlaybackState.PAUSED) {
+                audioPlayer.resume()
+            } else {
+                val tempFile = com.notenotes.audio.AudioUtils.saveToTemporaryWaveFile(context, samples, "temp_record_${System.currentTimeMillis()}.wav")
+                audioPlayer.play(tempFile)
+                val ms = getBufferDurationMs(samples.size)
+                audioPlayer.seekTo(if (ms > 0) _punchInPositionMs.value.toFloat() / ms.toFloat() else 0f)
+            }
+        } else {
+            _loadedIdea.value?.audioFilePath?.let { file ->
+                // Resume if paused, otherwise start from current progress
+                if (audioPlayer.state.value == com.notenotes.audio.AudioPlayer.PlaybackState.PAUSED) {
+                    audioPlayer.resume()
+                } else {
+                    audioPlayer.play(File(file))
+                    audioPlayer.seekTo(_punchInPositionMs.value.toFloat() / audioPlayer.getDurationMs().toLong().coerceAtLeast(1L))
+                }
+            }
+        }
+    }
+
+    fun pause() {
+        audioPlayer.pause()
+    }
+
+    fun stopPlayback() {
+        audioPlayer.stop()
+        _punchInPositionMs.value = 0L
+    }
+
+    fun seekPlayhead(fraction: Float) {
+        audioPlayer.seekTo(fraction)
+        if (isSynced.value) {
+            val ms = getCurrentTrackDurationMs()
+            _punchInPositionMs.value = (fraction * ms.toFloat()).toLong()
+        }
+    }
+
+    fun seekEditHead(fraction: Float) {
+        val ms = getCurrentTrackDurationMs()
+        _punchInPositionMs.value = (fraction * ms.toFloat()).toLong()
+        if (isSynced.value) {
+            audioPlayer.seekTo(fraction)
+        }
+    }
+
+    private val _playbackSpeed = MutableStateFlow(1f)
+    val playbackSpeed: StateFlow<Float> = _playbackSpeed
+
+    fun setPlaybackSpeed(speed: Float) {
+        _playbackSpeed.value = speed
+        audioPlayer.setPlaybackSpeed(speed)
+    }
+
+    fun jumpPlayheadToEdit() {
+        val dur = audioPlayer.getDurationMs().toLong().coerceAtLeast(1L)
+        val ms = getCurrentTrackDurationMs()
+        val frac = if (ms > 0L) _punchInPositionMs.value.toFloat() / ms.toFloat() else 0f
+        audioPlayer.seekTo(frac)
+    }
+
+    fun jumpEditToPlayhead() {
+        val dur = audioPlayer.getDurationMs().toLong().coerceAtLeast(1L)
+        val ms = getCurrentTrackDurationMs()
+        val frac = audioPlayer.getCurrentProgress()
+        _punchInPositionMs.value = (frac * ms.toFloat()).toLong()
+    }
+
+    fun loadIdeaForRerecord(ideaId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val idea = dao.getIdeaById(ideaId)
+                if (idea != null && idea.audioFilePath != null) {
+                    val file = File(idea.audioFilePath)
+                    if (file.exists()) {
+                        val shorts = WavReader.readSamples(file)
+                        if (shorts != null) {
+                            baseAudioBuffer = shorts
+                            loadedIdeaId = ideaId
+                            _loadedIdea.value = idea
+                            _waveformData.value = WaveformData.fromSamples(shorts, AudioRecorder.SAMPLE_RATE)
+                            _punchInPositionMs.value = 0L
+                            _isChanged.value = false
+                            Log.i(TAG, "Loaded idea $ideaId for rerecord, ${shorts.size} samples")
+                        } else {
+                            Log.e(TAG, "Failed to read WAV samples for idea $ideaId")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading idea for rerecord", e)
+            }
+        }
+    }
 
     fun setInstrument(instrument: InstrumentProfile) {
         _selectedInstrument.value = instrument
@@ -110,15 +262,31 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
+        // Pause playback if it's currently playing and lock in punch-in time
+        if (audioPlayer.state.value == com.notenotes.audio.AudioPlayer.PlaybackState.PLAYING) {
+            audioPlayer.pause()
+            val ms = getCurrentTrackDurationMs()
+            _punchInPositionMs.value = (audioPlayer.getCurrentProgress() * ms.toFloat()).toLong()
+        }
+
+        activePunchInMs = _punchInPositionMs.value
+
         val started = audioRecorder.startRecording()
         if (started) {
             Log.i(TAG, "startRecording: Recording started successfully")
             _uiState.value = UiState.RECORDING
-            // Update duration periodically
-            viewModelScope.launch {
+            
+            viewModelScope.launch(Dispatchers.Default) {
                 while (_uiState.value == UiState.RECORDING) {
-                    _recordingDuration.value = audioRecorder.getRecordingDurationSeconds()
-                    kotlinx.coroutines.delay(100)
+                    kotlinx.coroutines.delay(200)
+                    val live = audioRecorder.getLiveSamples()
+                    val merged = mergeBuffers(baseAudioBuffer, live, activePunchInMs)
+                    _waveformData.value = WaveformData.fromSamples(merged, AudioRecorder.SAMPLE_RATE)
+                    val liveDurationMs = getBufferDurationMs(live.size)
+                    val headMs = activePunchInMs + liveDurationMs
+                    if (isSynced.value) { _punchInPositionMs.value = activePunchInMs + liveDurationMs }
+                    val totalMs = getBufferDurationMs(merged.size)
+                    _recordHeadFraction.value = if (totalMs > 0) headMs.toFloat() / totalMs.toFloat() else 0f
                 }
             }
         } else {
@@ -128,18 +296,38 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun stopRecording() {
-        Log.i(TAG, "stopRecording: Stopping recording...")
-        rawSamples = audioRecorder.stopRecording()
-        _recordingDuration.value = (rawSamples?.size ?: 0).toDouble() / AudioRecorder.SAMPLE_RATE
-        Log.i(TAG, "stopRecording: Got ${rawSamples?.size ?: 0} samples, duration=${_recordingDuration.value}s")
+    fun pauseRecording() {
+        Log.i(TAG, "pauseRecording: Pausing recording...")
+        val rec = audioRecorder.stopRecording()
+        
+        baseAudioBuffer = mergeBuffers(baseAudioBuffer, rec, activePunchInMs)
+        _waveformData.value = WaveformData.fromSamples(baseAudioBuffer!!, AudioRecorder.SAMPLE_RATE)
+        _uiState.value = UiState.PAUSED
+        _isChanged.value = true
+        if (rec != null) {
+            val recordedLengthMs = getBufferDurationMs(rec.size)
+            if (isSynced.value) {
+                _punchInPositionMs.value = activePunchInMs + recordedLengthMs
+            } else {
+                _punchInPositionMs.value = activePunchInMs
+            }
+        }
+        
+        // Force audioPlayer to reload the new buffer on next play
+        audioPlayer.stop()
+    }
 
-        if (rawSamples == null || rawSamples!!.isEmpty()) {
-            Log.e(TAG, "stopRecording: No audio recorded!")
+    fun saveRecording() {
+        val samples = baseAudioBuffer
+        if (samples == null || samples.isEmpty()) {
             _errorMessage.value = "No audio recorded"
             _uiState.value = UiState.ERROR
             return
         }
+
+        rawSamples = samples
+        val tempFile = com.notenotes.audio.AudioUtils.saveToTemporaryWaveFile(context, samples, "temp_record_${System.currentTimeMillis()}.wav")
+        Log.i(TAG, "saveRecording: Saved to temp wav file: ${tempFile.absolutePath}")
 
         if (_autoTranscribe.value) {
             processRecording()
@@ -285,10 +473,46 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun reset() {
+        val currentLoadedIdeaId = loadedIdeaId
+        
         _uiState.value = UiState.IDLE
         _errorMessage.value = null
         _transcriptionResult.value = null
         _savedIdeaId.value = null
         rawSamples = null
+        baseAudioBuffer = null
+        loadedIdeaId = null
+        _punchInPositionMs.value = 0L
+        _loadedIdea.value = null
+        _waveformData.value = null
+        _isChanged.value = false
+        audioPlayer.stop()
+
+        if (currentLoadedIdeaId != null) {
+            loadIdeaForRerecord(currentLoadedIdeaId)
+        }
+    }
+
+    private fun mergeBuffers(base: ShortArray?, newRec: ShortArray?, punchInMs: Long): ShortArray {
+        if (newRec == null || newRec.isEmpty()) return base ?: ShortArray(0)
+        if (base == null || base.isEmpty()) return newRec
+
+        val punchInIndex = (punchInMs / 1000.0 * AudioRecorder.SAMPLE_RATE).toInt().coerceIn(0, base.size)
+        val newSize = kotlin.math.max(base.size, punchInIndex + newRec.size)
+        val mergedAudio = ShortArray(newSize)
+
+        System.arraycopy(base, 0, mergedAudio, 0, punchInIndex)
+        System.arraycopy(newRec, 0, mergedAudio, punchInIndex, newRec.size)
+
+        val baseTailStart = punchInIndex + newRec.size
+        if (baseTailStart < base.size) {
+            System.arraycopy(base, baseTailStart, mergedAudio, baseTailStart, base.size - baseTailStart)
+        }
+
+        return mergedAudio
     }
 }
+
+
+
+

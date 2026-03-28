@@ -190,11 +190,12 @@ fun TransportControls(
 }
 
 /**
- * Format milliseconds to MM:SS string.
+ * Format milliseconds to MM:SS.S string.
  */
 private fun formatTime(ms: Int): String {
     val seconds = ms / 1000
     val minutes = seconds / 60
     val remainingSeconds = seconds % 60
-    return "%d:%02d".format(minutes, remainingSeconds)
+    val tenths = (ms % 1000) / 100
+    return String.format(java.util.Locale.US, "%d:%02d.%1d", minutes, remainingSeconds, tenths)
 }

@@ -1476,7 +1476,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
             Log.w(TAG, "loadWaveformData: Could not read ${file.absolutePath}")
             return
         }
-        _waveformData.value = WaveformData.fromSamples(wavData.samples, wavData.sampleRate, 2000)
+        _waveformData.value = WaveformData.fromSamples(wavData.samples, wavData.sampleRate)
         _audioDurationMs.value = wavData.durationMs
         Log.d(TAG, "loadWaveformData: Loaded ${wavData.samples.size} samples, ${wavData.durationMs}ms")
     }

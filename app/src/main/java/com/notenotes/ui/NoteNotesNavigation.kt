@@ -5,6 +5,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
@@ -20,13 +25,14 @@ private const val TAG = "NNNav"
  * Navigation routes for NoteNotes.
  */
 object Routes {
-    const val RECORD = "record"
+    const val RECORD = "record?rerecordIdeaId={rerecordIdeaId}"
     const val PREVIEW = "preview/{ideaId}"
     const val LIBRARY = "library"
     const val SETTINGS = "settings"
     const val STATS = "stats"
 
     fun preview(ideaId: Long) = "preview/$ideaId"
+    fun recordWithId(ideaId: Long) = "record?rerecordIdeaId=$ideaId"
 }
 
 @Composable
@@ -37,11 +43,23 @@ fun NoteNotesNavHost(
     NavHost(
         navController = navController,
         startDestination = Routes.RECORD,
-        modifier = modifier
+        modifier = modifier,
+        enterTransition = { fadeIn(animationSpec = tween(200)) },
+        exitTransition = { fadeOut(animationSpec = tween(200)) },
+        popEnterTransition = { fadeIn(animationSpec = tween(200)) },
+        popExitTransition = { fadeOut(animationSpec = tween(200)) }
     ) {
-        composable(Routes.RECORD) {
-            Log.d(TAG, "Navigated to RECORD screen")
+        composable(
+            route = Routes.RECORD,
+            arguments = listOf(navArgument("rerecordIdeaId") {
+                type = NavType.StringType
+                nullable = true
+            })
+        ) { backStackEntry ->
+            val rerecordId = backStackEntry.arguments?.getString("rerecordIdeaId")?.toLongOrNull()
+            Log.d(TAG, "Navigated to RECORD screen, rerecordIdeaId=$rerecordId")
             RecordScreen(
+                rerecordIdeaId = rerecordId,
                 onNavigateToPreview = { ideaId ->
                     Log.i(TAG, "Navigating to PREVIEW for idea id=$ideaId")
                     navController.navigate(Routes.preview(ideaId))
@@ -76,6 +94,13 @@ fun NoteNotesNavHost(
                 onNavigateToSettings = {
                     Log.d(TAG, "Navigating to SETTINGS from PREVIEW")
                     navController.navigate(Routes.SETTINGS)
+                },
+                onNavigateToRerecord = { id ->
+                    Log.d(TAG, "Navigating to RERECORD for idea id=$id")
+                    navController.navigate(Routes.recordWithId(id)) {
+                        // Clear backstack to avoid deep nesting when going back and forth
+                        popUpTo(Routes.RECORD) { inclusive = true }
+                    }
                 }
             )
         }

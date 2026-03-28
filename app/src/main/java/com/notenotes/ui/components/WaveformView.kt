@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -40,20 +41,24 @@ import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationExceptio
 data class WaveformData(
     val peaks: FloatArray,          // normalized peak amplitudes (0.0–1.0), one per bin
     val durationSeconds: Float,     // total audio duration
-    val sampleRate: Int = 44100
+    val sampleRate: Int = 44100,
+    val maxAmplitude: Float = 1f
 ) {
     val binsCount: Int get() = peaks.size
 
     companion object {
         /** Downsample raw PCM samples into a fixed number of amplitude bins. */
-        fun fromSamples(samples: ShortArray, sampleRate: Int = 44100, numBins: Int = 2000): WaveformData {
+        fun fromSamples(samples: ShortArray, sampleRate: Int = 44100, numBins: Int? = null): WaveformData {
             if (samples.isEmpty()) return WaveformData(FloatArray(0), 0f, sampleRate)
+            
+            val durationSec = samples.size.toFloat() / sampleRate
+            val actualBins = numBins ?: (durationSec * 80).toInt().coerceAtLeast(200)
 
-            val samplesPerBin = samples.size / numBins
-            val peaks = FloatArray(numBins)
+            val samplesPerBin = samples.size / actualBins
+            val peaks = FloatArray(actualBins)
             var globalMax = 1f
 
-            for (bin in 0 until numBins) {
+            for (bin in 0 until actualBins) {
                 val start = bin * samplesPerBin
                 val end = minOf(start + samplesPerBin, samples.size)
                 var maxAmp = 0f
@@ -73,7 +78,8 @@ data class WaveformData(
             return WaveformData(
                 peaks = peaks,
                 durationSeconds = samples.size.toFloat() / sampleRate,
-                sampleRate = sampleRate
+                sampleRate = sampleRate,
+                maxAmplitude = globalMax
             )
         }
     }
@@ -118,36 +124,43 @@ fun WaveformView(
     isMoveMode: Boolean = false,
     onMoveSelectedNote: ((Int, Float) -> Unit)? = null
 ) {
-    if (waveformData == null || waveformData.peaks.isEmpty()) {
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = androidx.compose.ui.Alignment.Center
-        ) {
-            Text("Loading waveform...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val isDummy = waveformData == null || waveformData.durationSeconds <= 0f || waveformData.peaks.isEmpty()
+    
+    val renderWaveformData = remember(isDummy, waveformData, windowSizeSec) {
+        if (isDummy) {
+            val dummyBins = 200
+            val dummyPeaks = FloatArray(dummyBins) {
+                // Random subtle noise
+                (java.lang.Math.random().toFloat() * 0.2f) + 0.05f
+            }
+            WaveformData(dummyPeaks, windowSizeSec, 44100, 1f)
+        } else {
+            waveformData!!
         }
-        return
     }
 
-    val durationSec = durationMs / 1000f
-    val windowFractionSize = if (durationSec > 0) (windowSizeSec / durationSec).coerceIn(0.01f, 1f) else 1f
-    val windowEndFraction = (windowStartFraction + windowFractionSize).coerceAtMost(1f)
+    val actualDurationSec = if (isDummy) windowSizeSec else durationMs / 1000f
+    val durationSec = maxOf(actualDurationSec, windowSizeSec)
+    val windowFractionSize = if (durationSec > 0) (windowSizeSec / durationSec) else 1f
+    val windowEndFraction = windowStartFraction + windowFractionSize
+
+    val playbackGlobalFraction = if (actualDurationSec > 0) (playbackProgress * actualDurationSec) / durationSec else 0f
+    val editGlobalFraction = if (editCursorFraction != null && actualDurationSec > 0) (editCursorFraction * actualDurationSec) / durationSec else null
 
     // Compute note overlay positions (global fractions)
-    val noteOverlays = remember(notes, tempoBpm, durationMs) {
-        computeNoteOverlays(notes, tempoBpm, durationMs)
+    val noteOverlays = remember(notes, tempoBpm, durationMs, durationSec) {
+        computeNoteOverlays(notes, tempoBpm, durationMs, durationSec)
     }
 
     val textMeasurer = rememberTextMeasurer()
-    val waveColor = MaterialTheme.colorScheme.primary
-    val waveBgColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-    val playheadColor = MaterialTheme.colorScheme.error
+    val waveColor = if (isDummy) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f) else MaterialTheme.colorScheme.primary
+    val waveBgColor = if (isDummy) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+    val playheadColor = com.notenotes.ui.theme.PlayheadCursorColor
     val noteBoxColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.3f)
     val noteBorderColor = MaterialTheme.colorScheme.tertiary
     val selectedNoteColor = MaterialTheme.colorScheme.error.copy(alpha = 0.4f)
     val selectedNoteBorder = MaterialTheme.colorScheme.error
-    val editCursorColor = MaterialTheme.colorScheme.secondary
+    val editCursorColor = com.notenotes.ui.theme.EditCursorColor
     val noteTextColor = MaterialTheme.colorScheme.onTertiaryContainer
     val tabTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
     val bgColor = MaterialTheme.colorScheme.surfaceVariant
@@ -303,11 +316,17 @@ fun WaveformView(
         val waveBottom = h - 40f  // more room for note labels + tab info
         val waveHeight = waveBottom - waveTop
         val waveMid = waveTop + waveHeight / 2f
+        val maxAmp = renderWaveformData.maxAmplitude
+        val maxDbValue = if (maxAmp > 1f) 20f * kotlin.math.log10(maxAmp / 32768f) else -60f
+        val topDbLabel = if (maxDbValue <= -60f) "-∞ dB" else String.format("%.1f dB", maxDbValue)
+        val midDbLabel = "-∞ dB"
+        val bottomDbLabel = topDbLabel
+
         val moveModeBorderEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
 
         // Draw waveform (only the sub-range visible in the window)
-        drawWindowedWaveform(waveformData, w, waveTop, waveBottom, waveColor, waveBgColor,
-            windowStartFraction, windowEndFraction)
+        drawWindowedWaveform(renderWaveformData, w, waveTop, waveBottom, waveColor, waveBgColor,
+            windowStartFraction * durationSec, windowEndFraction * durationSec, windowSizeSec)
 
         // Draw note overlays (only those visible in window)
         for (overlay in noteOverlays) {
@@ -364,11 +383,12 @@ fun WaveformView(
             val windowEndSec = windowEndFraction * durationSec
             val windowDurSec = windowEndSec - windowStartSec
 
-            val tickInterval = when {
-                windowDurSec < 3 -> 0.5f
-                windowDurSec < 10 -> 1f
-                windowDurSec < 30 -> 2f
-                else -> 5f
+            val targetTick = windowSizeSec * 0.1f
+            val tickInterval = if (targetTick >= 10f) {
+                kotlin.math.round(targetTick)
+            } else {
+                val options = listOf(0.25f, 0.5f, 1f, 2f, 3f, 4f, 5f, 10f)
+                options.minByOrNull { kotlin.math.abs(it - targetTick) } ?: 1f
             }
 
             // Start from first tick at or after windowStartSec
@@ -382,7 +402,14 @@ fun WaveformView(
                     end = Offset(x, waveTop + 8f),
                     strokeWidth = 1f
                 )
-                val timeLabel = if (tickInterval < 1f) String.format("%.1fs", t) else "${t.toInt()}s"
+                val timeLabel = when {
+                    tickInterval == 0.25f -> {
+                        val str = String.format(java.util.Locale.US, "%.2fs", t)
+                        if (str.endsWith("0s")) str.replace("0s", "s") else str
+                    }
+                    tickInterval < 1f -> String.format(java.util.Locale.US, "%.1fs", t)
+                    else -> "${t.toInt()}s"
+                }
                 val timeLabelResult = textMeasurer.measure(timeLabel, timeTextStyle)
                 if (x + timeLabelResult.size.width < w) {
                     drawText(timeLabelResult, topLeft = Offset(x + 2f, 2f))
@@ -391,29 +418,80 @@ fun WaveformView(
             }
         }
 
-        // Draw playback position line (mapped to window)
-        if (playbackProgress > 0f && playbackProgress >= windowStartFraction && playbackProgress <= windowEndFraction) {
-            val localFrac = (playbackProgress - windowStartFraction) / windowFractionSize
-            val playX = localFrac * w
+        // Y-axis grid lines
+        drawLine(
+            color = Color.Gray.copy(alpha = 0.2f),
+            start = Offset(0f, waveTop),
+            end = Offset(w, waveTop),
+            strokeWidth = 1f
+        )
+        drawLine(
+            color = Color.Gray.copy(alpha = 0.2f),
+            start = Offset(0f, waveBottom),
+            end = Offset(w, waveBottom),
+            strokeWidth = 1f
+        )
+        drawContext.canvas.nativeCanvas.drawText(topDbLabel, 5f, waveTop + 25f, android.graphics.Paint().apply {
+            color = android.graphics.Color.LTGRAY
+            textSize = 24f
+        })
+        drawContext.canvas.nativeCanvas.drawText(bottomDbLabel, 5f, waveBottom - 5f, android.graphics.Paint().apply {
+            color = android.graphics.Color.LTGRAY
+            textSize = 24f
+        })
+
+        // Draw center line
+        drawLine(
+            color = Color.Gray.copy(alpha = 0.4f),
+            start = Offset(0f, waveMid),
+            end = Offset(w, waveMid),
+            strokeWidth = 1.0f
+        )
+        drawContext.canvas.nativeCanvas.drawText(midDbLabel, 5f, waveMid - 5f, android.graphics.Paint().apply {
+            color = android.graphics.Color.LTGRAY
+            textSize = 24f
+        })
+
+        val hasPlay = playbackGlobalFraction >= 0f && playbackGlobalFraction >= windowStartFraction && playbackGlobalFraction <= windowEndFraction
+        val hasEdit = editGlobalFraction != null && editGlobalFraction >= windowStartFraction && editGlobalFraction <= windowEndFraction
+        
+        var playX = -1f
+        var cursorX = -1f
+
+        if (hasPlay) {
+            val localFrac = (playbackGlobalFraction - windowStartFraction) / windowFractionSize
+            playX = localFrac * w
+        }
+
+        if (hasEdit) {
+            val localFrac = (editGlobalFraction!! - windowStartFraction) / windowFractionSize
+            cursorX = localFrac * w
+        }
+
+        val areSynced = hasPlay && hasEdit && kotlin.math.abs(playX - cursorX) < 2f
+
+        if (hasPlay && !areSynced) {
             drawLine(
                 color = playheadColor,
                 start = Offset(playX, 0f),
                 end = Offset(playX, h),
                 strokeWidth = 2.5f
             )
+            val triPath = Path()
+            triPath.moveTo(playX - 8f, 0f)
+            triPath.lineTo(playX + 8f, 0f)
+            triPath.lineTo(playX, 12f)
+            triPath.close()
+            drawPath(triPath, playheadColor, style = Fill)
         }
 
-        // Draw edit cursor
-        if (editCursorFraction != null && editCursorFraction >= windowStartFraction && editCursorFraction <= windowEndFraction) {
-            val localFrac = (editCursorFraction - windowStartFraction) / windowFractionSize
-            val cursorX = localFrac * w
+        if (hasEdit && !areSynced) {
             drawLine(
                 color = editCursorColor,
                 start = Offset(cursorX, 0f),
                 end = Offset(cursorX, h),
                 strokeWidth = 3f
             )
-            // Triangle at top
             val triPath = Path()
             triPath.moveTo(cursorX - 8f, 0f)
             triPath.lineTo(cursorX + 8f, 0f)
@@ -422,13 +500,37 @@ fun WaveformView(
             drawPath(triPath, editCursorColor, style = Fill)
         }
 
-        // Center line
-        drawLine(
-            color = Color.Gray.copy(alpha = 0.3f),
-            start = Offset(0f, waveMid),
-            end = Offset(w, waveMid),
-            strokeWidth = 0.5f
-        )
+        if (areSynced) {
+            val syncX = playX
+            drawLine(
+                color = playheadColor,
+                start = Offset(syncX, 0f),
+                end = Offset(syncX, h),
+                strokeWidth = 3f
+            )
+            drawLine(
+                color = editCursorColor,
+                start = Offset(syncX, 0f),
+                end = Offset(syncX, h),
+                strokeWidth = 3f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f)
+            )
+            
+            val tipX = syncX
+            val leftTri = Path()
+            leftTri.moveTo(tipX - 10f, 0f)
+            leftTri.lineTo(tipX, 0f)
+            leftTri.lineTo(tipX, 14f)
+            leftTri.close()
+            drawPath(leftTri, editCursorColor, style = Fill)
+
+            val rightTri = Path()
+            rightTri.moveTo(tipX, 0f)
+            rightTri.lineTo(tipX + 10f, 0f)
+            rightTri.lineTo(tipX, 14f)
+            rightTri.close()
+            drawPath(rightTri, playheadColor, style = Fill)
+        }
     }
 }
 
@@ -442,37 +544,41 @@ private fun DrawScope.drawWindowedWaveform(
     bottom: Float,
     waveColor: Color,
     bgColor: Color,
-    windowStart: Float,
-    windowEnd: Float
+    windowStartSec: Float,
+    windowEndSec: Float,
+    windowSizeSec: Float
 ) {
     val mid = (top + bottom) / 2f
     val maxAmp = (bottom - top) / 2f
     val bins = data.peaks.size
     if (bins == 0) return
 
-    val startBin = (windowStart * bins).toInt().coerceIn(0, bins - 1)
-    val endBin = (windowEnd * bins).toInt().coerceIn(0, bins)
-    val visibleBins = endBin - startBin
-    if (visibleBins <= 0) return
+    val actualDurationSec = data.durationSeconds
+    val timePerBin = if (bins > 0) actualDurationSec / bins else 0f
+    if (timePerBin <= 0f) return
 
-    val binWidth = width / visibleBins
+    val startBin = (windowStartSec / timePerBin).toInt().coerceIn(0, bins)
+    val endBin = (windowEndSec / timePerBin).toInt().coerceIn(0, bins)
+    if (startBin >= endBin) return
 
-    // Draw filled waveform
     val pathTop = Path()
     val pathBottom = Path()
-    pathTop.moveTo(0f, mid)
-    pathBottom.moveTo(0f, mid)
+    
+    val firstX = ((startBin * timePerBin - windowStartSec) / windowSizeSec) * width
+    pathTop.moveTo(firstX.toFloat(), mid)
+    pathBottom.moveTo(firstX.toFloat(), mid)
 
     for (i in startBin until endBin) {
-        val x = (i - startBin) * binWidth
+        val x = (((i * timePerBin - windowStartSec) / windowSizeSec) * width).toFloat()
         val amp = data.peaks[i] * maxAmp
         pathTop.lineTo(x, mid - amp)
         pathBottom.lineTo(x, mid + amp)
     }
 
-    pathTop.lineTo(width, mid)
+    val lastX = ((endBin * timePerBin - windowStartSec) / windowSizeSec) * width
+    pathTop.lineTo(lastX.toFloat(), mid)
     pathTop.close()
-    pathBottom.lineTo(width, mid)
+    pathBottom.lineTo(lastX.toFloat(), mid)
     pathBottom.close()
 
     drawPath(pathTop, bgColor, style = Fill)
@@ -480,14 +586,14 @@ private fun DrawScope.drawWindowedWaveform(
 
     // Draw outline
     val outlinePath = Path()
-    outlinePath.moveTo(0f, mid)
+    outlinePath.moveTo(firstX.toFloat(), mid)
     for (i in startBin until endBin) {
-        val x = (i - startBin) * binWidth
+        val x = (((i * timePerBin - windowStartSec) / windowSizeSec) * width).toFloat()
         val amp = data.peaks[i] * maxAmp
         outlinePath.lineTo(x, mid - amp)
     }
     for (i in (endBin - 1) downTo startBin) {
-        val x = (i - startBin) * binWidth
+        val x = (((i * timePerBin - windowStartSec) / windowSizeSec) * width).toFloat()
         val amp = data.peaks[i] * maxAmp
         outlinePath.lineTo(x, mid + amp)
     }
@@ -502,11 +608,11 @@ private fun DrawScope.drawWindowedWaveform(
 private fun computeNoteOverlays(
     notes: List<MusicalNote>,
     tempoBpm: Int,
-    durationMs: Int
+    durationMs: Int,
+    paddedDurationSec: Float
 ): List<NoteOverlayItem> {
     if (notes.isEmpty() || durationMs <= 0) return emptyList()
 
-    val durationSec = durationMs / 1000f
     val beatDurationSec = 60f / tempoBpm
     val divisions = 4
 
@@ -529,8 +635,8 @@ private fun computeNoteOverlays(
         }
 
         val noteDurationSec = note.durationTicks * beatDurationSec / divisions
-        val startFraction = (noteStartSec / durationSec).coerceIn(0f, 1f)
-        val endFraction = ((noteStartSec + noteDurationSec) / durationSec).coerceIn(0f, 1f)
+        val startFraction = (noteStartSec / paddedDurationSec).coerceIn(0f, 1f)
+        val endFraction = ((noteStartSec + noteDurationSec) / paddedDurationSec).coerceIn(0f, 1f)
 
         val label = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotated(note) 
 
@@ -550,3 +656,7 @@ private fun computeNoteOverlays(
 
     return overlays
 }
+
+
+
+

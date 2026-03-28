@@ -6,7 +6,16 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.text.KeyboardActions
+
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.*
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -22,6 +31,7 @@ import kotlinx.coroutines.withContext
 
 private const val PREFS_NAME = "notenotes_settings"
 private const val KEY_AUTO_TRANSCRIBE = "auto_transcribe"
+const val KEY_WAVEFORM_WINDOW_SIZE = "waveform_window_size"
 const val KEY_SAVE_PATH_URI = "save_path_uri"
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,6 +45,7 @@ fun SettingsScreen(
     var selectedInstrument by remember { mutableStateOf(InstrumentProfile.GUITAR) }
     var defaultTempo by remember { mutableStateOf("120") }
     var autoTranscribe by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_TRANSCRIBE, true)) }
+    var waveformWindowSize by remember { mutableStateOf(prefs.getFloat(KEY_WAVEFORM_WINDOW_SIZE, 5f)) }
     
     // Save path - human-readable label derived from stored URI
     var savePathUri by remember { mutableStateOf(prefs.getString(KEY_SAVE_PATH_URI, null)) }
@@ -79,9 +90,13 @@ fun SettingsScreen(
             )
         }
     ) { padding ->
+        val focusManager = LocalFocusManager.current
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { focusManager.clearFocus() })
+                }
                 .padding(padding)
                 .padding(16.dp)
         ) {
@@ -171,6 +186,81 @@ fun SettingsScreen(
                         autoTranscribe = it
                         prefs.edit().putBoolean(KEY_AUTO_TRANSCRIBE, it).apply()
                     }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+            
+            // Visualization Settings
+            Text(
+                text = "Visualization Settings",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Column(modifier = Modifier.fillMaxWidth()) {
+                var windowSizeText by remember(waveformWindowSize) { mutableStateOf(String.format(java.util.Locale.US, "%.1f", waveformWindowSize)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Waveform Window (sec): ",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedTextField(
+                        value = windowSizeText,
+                        onValueChange = { newValue ->
+                            windowSizeText = newValue
+                        },
+                        modifier = Modifier
+                            .width(100.dp)
+                            .onFocusChanged { focusState ->
+                                if (!focusState.isFocused) {
+                                    val validFloat = windowSizeText.toFloatOrNull() ?: waveformWindowSize
+                                    val finalValue = maxOf(1f, validFloat)
+                                    if (waveformWindowSize != finalValue) {
+                                        waveformWindowSize = finalValue
+                                        prefs.edit().putFloat(KEY_WAVEFORM_WINDOW_SIZE, finalValue).apply()
+                                    }
+                                    windowSizeText = String.format(java.util.Locale.US, "%.1f", finalValue)
+                                }
+                            },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = { focusManager.clearFocus() }
+                        ),
+                        singleLine = true
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("5s", style = MaterialTheme.typography.bodySmall)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Slider(
+                        value = waveformWindowSize.coerceIn(5f, 30f),
+                        onValueChange = { newValue ->
+                            val snapped = kotlin.math.round(newValue)
+                            waveformWindowSize = snapped
+                            windowSizeText = String.format(java.util.Locale.US, "%.1f", snapped)
+                        },
+                        onValueChangeFinished = {
+                            prefs.edit().putFloat(KEY_WAVEFORM_WINDOW_SIZE, waveformWindowSize).apply()
+                        },
+                        valueRange = 5f..30f,
+                        steps = 24,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("30s", style = MaterialTheme.typography.bodySmall)
+                }
+                Text(
+                    text = "Adjust the duration of audio visible on screen.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
