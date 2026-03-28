@@ -28,18 +28,23 @@ object NoteTextUtils {
         return "${names[noteIndex]}$octave"
     }
 
-    fun buildPitchFretAnnotated(note: MusicalNote) = buildAnnotatedString {
+    fun buildPitchFretAnnotated(note: MusicalNote, isStrikethrough: Boolean = false) = buildAnnotatedString {     
         val entries = buildPitchEntries(note)
         entries.forEachIndexed { idx, (pitch, stringIndex, fret) ->
-            val stringColor = if (stringIndex in GuitarUtils.STRINGS.indices)
+            val stringColor = if (isStrikethrough) Color.Gray else if (stringIndex in GuitarUtils.STRINGS.indices)   
                 Color(GuitarUtils.STRINGS[stringIndex].colorArgb)
             else Color.Unspecified
 
-            withStyle(SpanStyle(color = stringColor, fontWeight = FontWeight.SemiBold)) {
+            val textDeco = if (isStrikethrough) androidx.compose.ui.text.style.TextDecoration.LineThrough else null
+
+            val pitchFontSize = if (isStrikethrough) 10.sp else androidx.compose.ui.unit.TextUnit.Unspecified
+            val fretFontSize = if (isStrikethrough) 6.sp else 8.sp
+
+            withStyle(SpanStyle(color = stringColor, fontSize = pitchFontSize, fontWeight = if (isStrikethrough) FontWeight.Normal else FontWeight.SemiBold, textDecoration = textDeco)) {
                 append(midiToDisplayName(pitch))
             }
             if (!note.isRest && (note.isChord || note.hasTab)) {
-                withStyle(SpanStyle(color = stringColor, fontSize = 8.sp, baselineShift = BaselineShift.Superscript)) {
+                withStyle(SpanStyle(color = stringColor, fontSize = fretFontSize, baselineShift = BaselineShift.Superscript, textDecoration = textDeco)) {
                     append(fret.toString())
                 }
             }

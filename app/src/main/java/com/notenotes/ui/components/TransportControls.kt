@@ -34,8 +34,8 @@ fun TransportControls(
     windowStartFraction: Float = 0f,
     windowSizeSec: Float = 5f,
     isWindowLocked: Boolean = false,
-    onWindowBack: () -> Unit = {},
-    onWindowForward: () -> Unit = {},
+    onPanToEditCursor: () -> Unit = {},
+    onPanToPlayhead: () -> Unit = {},
     onToggleLock: () -> Unit = {},
     // Speed controls
     playbackSpeed: Float = 1f,
@@ -144,9 +144,9 @@ fun TransportControls(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Window back
-                IconButton(onClick = onWindowBack, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.Filled.SkipPrevious, contentDescription = "Window Back", modifier = Modifier.size(22.dp))
+                // Pan to Edit Cursor
+                IconButton(onClick = onPanToEditCursor, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Filled.Edit, contentDescription = "Pan to Edit Cursor", modifier = Modifier.size(20.dp))
                 }
 
                 // Play/Pause
@@ -170,9 +170,9 @@ fun TransportControls(
                     )
                 }
 
-                // Window forward
-                IconButton(onClick = onWindowForward, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.Filled.SkipNext, contentDescription = "Window Forward", modifier = Modifier.size(22.dp))
+                // Pan to Playhead
+                IconButton(onClick = onPanToPlayhead, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = "Pan to Playhead", modifier = Modifier.size(20.dp))
                 }
 
                 // Lock toggle

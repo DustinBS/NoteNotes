@@ -316,12 +316,13 @@ fun RecordScreen(
                 playbackSpeed = playbackSpeed,
                 onSpeedChange = { viewModel.setPlaybackSpeed(it) },
                 isWindowLocked = isWindowLocked,
-                onWindowBack = {
-                    targetWindowStartSec.floatValue = maxOf(0f, targetWindowStartSec.floatValue - waveformWindowSize)
-                },
-                onWindowForward = {
-                    val maxScroll = maxOf(0f, (waveformData?.durationSeconds ?: 0.1f) - waveformWindowSize)
-                    targetWindowStartSec.floatValue = minOf(maxScroll, targetWindowStartSec.floatValue + waveformWindowSize)
+                onPanToEditCursor = {}, // Not applicable in RecordScreen
+                onPanToPlayhead = {
+                     if (totalSecData > 0) {
+                         val windowFractionSize = waveformWindowSize / totalSecData
+                         val newStart = (currentDisplayProgress - windowFractionSize / 2f).coerceIn(0f, (1f - windowFractionSize).coerceAtLeast(0f))
+                         targetWindowStartSec.floatValue = newStart * totalSecData
+                     }
                 },
                 onToggleLock = { isWindowLocked = !isWindowLocked }
             )

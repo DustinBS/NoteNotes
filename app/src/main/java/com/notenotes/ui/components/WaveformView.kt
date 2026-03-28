@@ -122,7 +122,8 @@ fun WaveformView(
     windowStartFraction: Float = 0f,
     windowSizeSec: Float = 5f,
     isMoveMode: Boolean = false,
-    onMoveSelectedNote: ((Int, Float) -> Unit)? = null
+    onMoveSelectedNote: ((Int, Float) -> Unit)? = null,
+    pendingSelectedNoteText: androidx.compose.ui.text.AnnotatedString? = null
 ) {
     val isDummy = waveformData == null || waveformData.durationSeconds <= 0f || waveformData.peaks.isEmpty()
     
@@ -360,7 +361,8 @@ fun WaveformView(
             )
 
             // Note label at bottom
-            val labelResult = textMeasurer.measure(overlay.label, noteTextStyle)
+            val displayLabel = if (isSelected && pendingSelectedNoteText != null) pendingSelectedNoteText else overlay.label
+            val labelResult = textMeasurer.measure(displayLabel, noteTextStyle)
             val labelX = x1 + 2f
             val labelY = waveBottom + 2f
             if (labelX + labelResult.size.width < w && labelX >= 0f) {

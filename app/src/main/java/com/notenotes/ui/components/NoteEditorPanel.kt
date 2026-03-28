@@ -69,15 +69,34 @@ fun NoteEditorPanel(
     isMoveMode: Boolean = false,
     onToggleMoveMode: (() -> Unit)? = null,
     onCopyFromNote: ((Int) -> Unit)? = null,
-    onPendingChangesChanged: ((Boolean) -> Unit)? = null,
+    onPendingChangesChanged: ((Boolean, androidx.compose.ui.text.AnnotatedString?) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val state = rememberGuitarChordEditState(selectedNote)
     var showCopyFromMenu by remember(selectedNoteIndex) { mutableStateOf(false) }
-    var showDeleteWholeChordConfirm by remember { mutableStateOf(false) }
+    var showDeleteWholeChordConfirm by remember { mutableStateOf(false) }      
 
-    SideEffect {
-        onPendingChangesChanged?.invoke(hasSelectedNote && selectedNoteIndex != null && state.hasPendingChanges)
+    LaunchedEffect(hasSelectedNote, selectedNoteIndex, state) {
+        androidx.compose.runtime.snapshotFlow {
+            if (hasSelectedNote && selectedNoteIndex != null && state.hasPendingChanges && selectedNote != null) {
+                val originalText = NoteTextUtils.buildPitchFretAnnotated(selectedNote, isStrikethrough = true)
+                val newPitches = listOf(state.editedPrimaryMidi) + state.editableChordPitches
+                val newPositions = listOf(Pair(state.editedPrimaryString, state.editedPrimaryFret)) + state.editableChordPositions
+                val dummyNote = selectedNote.copy(pitches = newPitches, tabPositions = newPositions)
+                val newText = NoteTextUtils.buildPitchFretAnnotated(dummyNote)
+                
+                val combined = androidx.compose.ui.text.buildAnnotatedString {
+                    append(originalText)
+                    append(" -> ")
+                    append(newText)
+                }
+                true to combined
+            } else {
+                false to null
+            }
+        }.collect { (hasPending, pendingText) ->
+            onPendingChangesChanged?.invoke(hasPending, pendingText)
+        }
     }
 
     if (showDeleteWholeChordConfirm) {

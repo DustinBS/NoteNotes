@@ -103,11 +103,18 @@ fun PreviewScreen(
     var showInstrumentDialog by remember { mutableStateOf(false) }
     var showSaveAsDialog by remember { mutableStateOf(false) }
     var waveformEditorHasPendingChanges by remember { mutableStateOf(false) }
+    var waveformEditorPendingNoteText by remember { mutableStateOf<androidx.compose.ui.text.AnnotatedString?>(null) }
     var showWaveformDiscardDialog by remember { mutableStateOf(false) }
     var pendingWaveformIntent by remember { mutableStateOf<Triple<Int?, Float?, Float?>?>(null) }
     var pendingTabSelection by remember { mutableStateOf<Int?>(null) }
     var pendingPostDiscardAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val interactionScope = rememberCoroutineScope()
+
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == 0 && idea?.timeSignature == null) {
+            viewModel.autoDetectAndApplySongParameters()
+        }
+    }
 
     fun queueWaveformDiscard(
         waveformIntent: Triple<Int?, Float?, Float?>?,
@@ -358,12 +365,24 @@ fun PreviewScreen(
                 Column(
                     modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())
                 ) {
-                    Text(
+                                        Text(
                         "Changing key will regenerate sheet music. Notes are not transposed.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
+                    OutlinedButton(
+                        onClick = {
+                            val detectedKey = viewModel.autoDetectKey()
+                            viewModel.updateKeySignature(detectedKey)
+                            showKeyDialog = false
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                    ) {
+                        Icon(Icons.Filled.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Auto-Detect Key Signature")
+                    }
                     KeySignature.ALL_KEYS.forEach { key ->
                         val isCurrent = idea?.keySignature == key.toString()
                         DropdownMenuItem(
@@ -399,12 +418,24 @@ fun PreviewScreen(
             title = { Text("Time Signature") },
             text = {
                 Column {
-                    Text(
+                                        Text(
                         "Changing time signature will regenerate sheet music.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
+                    OutlinedButton(
+                        onClick = {
+                            val detectedTs = viewModel.autoDetectTimeSignature()
+                            viewModel.updateTimeSignature(detectedTs)
+                            showTimeDialog = false
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                    ) {
+                        Icon(Icons.Filled.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Auto-Detect Time Signature")
+                    }
                     TimeSignature.SUPPORTED.forEach { ts ->
                         val isCurrent = idea?.timeSignature == ts.toString()
                         DropdownMenuItem(
@@ -1178,6 +1209,7 @@ fun PreviewScreen(
                             windowStartFraction = windowStartFraction,
                             windowSizeSec = windowSizeSec,
                             isMoveMode = isMoveMode,
+                            pendingSelectedNoteText = waveformEditorPendingNoteText,
                             onMoveSelectedNote = { noteIndex, newStartFraction ->
                                 viewModel.moveNoteToFraction(noteIndex, newStartFraction)
                             }
@@ -1229,8 +1261,9 @@ fun PreviewScreen(
                                     viewModel.addNote(entries)
                                 }
                             },
-                            onPendingChangesChanged = { hasPendingChanges ->
+                            onPendingChangesChanged = { hasPendingChanges, pendingText ->
                                 waveformEditorHasPendingChanges = hasPendingChanges
+                                waveformEditorPendingNoteText = pendingText
                             }
                         )
                     }
@@ -1252,8 +1285,18 @@ fun PreviewScreen(
                 windowStartFraction = windowStartFraction,
                 windowSizeSec = windowSizeSec,
                 isWindowLocked = isWindowLocked,
-                onWindowBack = { runGuardedAction { viewModel.moveWindow(-1f) } },
-                onWindowForward = { runGuardedAction { viewModel.moveWindow(1f) } },
+                onPanToEditCursor = { 
+                    runGuardedAction { 
+                        if (editCursorFraction != null) {
+                            viewModel.panWindowTo(editCursorFraction!!)
+                        }
+                    } 
+                },
+                onPanToPlayhead = { 
+                    runGuardedAction { 
+                        viewModel.panWindowTo(playbackProgress)
+                    } 
+                },
                 onToggleLock = { runGuardedAction { viewModel.toggleWindowLock() } },
                 playbackSpeed = playbackSpeed,
                 onSpeedChange = { speed -> runGuardedAction { viewModel.setPlaybackSpeed(speed) } },
@@ -1262,3 +1305,9 @@ fun PreviewScreen(
         }
     }
 }
+
+
+
+
+
+

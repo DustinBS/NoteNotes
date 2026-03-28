@@ -199,14 +199,12 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun jumpPlayheadToEdit() {
-        val dur = audioPlayer.getDurationMs().toLong().coerceAtLeast(1L)
         val ms = getCurrentTrackDurationMs()
         val frac = if (ms > 0L) _punchInPositionMs.value.toFloat() / ms.toFloat() else 0f
         audioPlayer.seekTo(frac)
     }
 
     fun jumpEditToPlayhead() {
-        val dur = audioPlayer.getDurationMs().toLong().coerceAtLeast(1L)
         val ms = getCurrentTrackDurationMs()
         val frac = audioPlayer.getCurrentProgress()
         _punchInPositionMs.value = (frac * ms.toFloat()).toLong()
@@ -216,7 +214,7 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val idea = dao.getIdeaById(ideaId)
-                if (idea != null && idea.audioFilePath != null) {
+                if (idea != null) {
                     val file = File(idea.audioFilePath)
                     if (file.exists()) {
                         val shorts = WavReader.readSamples(file)
@@ -304,15 +302,12 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
         _waveformData.value = WaveformData.fromSamples(baseAudioBuffer!!, AudioRecorder.SAMPLE_RATE)
         _uiState.value = UiState.PAUSED
         _isChanged.value = true
-        if (rec != null) {
-            val recordedLengthMs = getBufferDurationMs(rec.size)
+        val recordedLengthMs = getBufferDurationMs(rec.size)
             if (isSynced.value) {
                 _punchInPositionMs.value = activePunchInMs + recordedLengthMs
             } else {
                 _punchInPositionMs.value = activePunchInMs
             }
-        }
-        
         // Force audioPlayer to reload the new buffer on next play
         audioPlayer.stop()
     }
@@ -366,8 +361,8 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
                     musicXmlFilePath = null,
                     instrument = instrument.name,
                     tempoBpm = 120,
-                    keySignature = "C",
-                    timeSignature = "4/4",
+                    keySignature = null,
+                    timeSignature = null,
                     notes = "[]"
                 )
                 val id = dao.insert(idea)
@@ -512,6 +507,7 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
         return mergedAudio
     }
 }
+
 
 
 
