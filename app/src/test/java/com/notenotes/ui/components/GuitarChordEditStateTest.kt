@@ -18,11 +18,11 @@ class GuitarChordEditStateTest {
 
         val state = GuitarChordEditState(testNote)
 
-        assertEquals(0, state.editedPrimaryString)
+        assertEquals(6, state.editedPrimaryString)
         assertEquals(0, state.editedPrimaryFret)
         
         assertEquals(1, state.editableChordPitches.size)
-        assertEquals(1, state.editableChordPositions[0].first)
+        assertEquals(5, state.editableChordPositions[0].first)
         assertEquals(1, state.editableChordPositions[0].second)
 
         assertFalse(state.hasPendingChanges)
@@ -53,13 +53,13 @@ class GuitarChordEditStateTest {
 
         assertTrue("Should successfully promote chord note", promoted)
         
-        // Assert old second note is now primary
-        assertEquals(1, state.editedPrimaryString)
+        // Assert old second note is now primary (human numbering)
+        assertEquals(5, state.editedPrimaryString)
         assertEquals(1, state.editedPrimaryFret)
 
-        // Assert old third note is now first chord note
+        // Assert old third note is now first chord note (human numbering)
         assertEquals(1, state.editableChordPitches.size)
-        assertEquals(2, state.editableChordPositions[0].first)
+        assertEquals(4, state.editableChordPositions[0].first)
         assertEquals(2, state.editableChordPositions[0].second)
     }
 

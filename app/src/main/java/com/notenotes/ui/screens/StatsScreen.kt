@@ -139,10 +139,11 @@ internal fun computeStatsForIdeas(ideas: List<MelodyIdea>): StatsUiState {
     var totalNotes = 0
     var totalDurationSec = 0f
 
-    fun addStringUsage(stringIndex: Int?, fret: Int?, durationSec: Float) {
-        if (stringIndex == null || stringIndex !in GuitarUtils.STRINGS.indices) return
-        notesPerString[stringIndex] += 1
-        durationPerStringSec[stringIndex] += durationSec
+    fun addStringUsageHuman(humanString: Int?, fret: Int?, durationSec: Float) {
+        if (humanString == null || humanString !in 1..GuitarUtils.STRINGS.size) return
+        val idx = GuitarUtils.humanToIndex(humanString) ?: return
+        notesPerString[idx] += 1
+        durationPerStringSec[idx] += durationSec
         totalNotes += 1
         totalDurationSec += durationSec
         if (fret != null) {
@@ -164,24 +165,17 @@ internal fun computeStatsForIdeas(ideas: List<MelodyIdea>): StatsUiState {
             val chordSize = note.pitches.size
             chordSizeCounts[chordSize] = (chordSizeCounts[chordSize] ?: 0) + 1
 
-            // Prefer the index-aligned view exposed by MusicalNote.safeTabPositionsAsIndex.
-            // If absent, fall back to fromMidi and convert the returned human string
-            // number to a 0-based index.
-            val primaryIndexed = note.safeTabPositionsAsIndex.firstOrNull() ?: GuitarUtils.fromMidi(note.pitches.first())?.let { sf ->
-                val idx = sf.first.let { com.notenotes.util.GuitarUtils.humanToIndex(it) }
-                if (idx != null) Pair(idx, sf.second) else null
-            }
-            addStringUsage(primaryIndexed?.first, primaryIndexed?.second, durationSec)
+            // Prefer the canonical human 1-based view exposed by MusicalNote.safeTabPositions.
+            // If absent, fall back to fromMidi which returns a human string number.
+            val primaryHuman = note.safeTabPositions.firstOrNull() ?: com.notenotes.util.GuitarUtils.fromMidi(note.pitches.first())
+            addStringUsageHuman(primaryHuman?.first, primaryHuman?.second, durationSec)
 
             if (note.isChord) {
                 note.pitches.indices.forEach { chordIndex ->
                     if (chordIndex == 0) return@forEach // skip primary pitch
                     val pitch = note.pitches[chordIndex]
-                    val chordIndexed = note.safeTabPositionsAsIndex.getOrNull(chordIndex) ?: GuitarUtils.fromMidi(pitch)?.let { sf ->
-                        val idx = sf.first.let { com.notenotes.util.GuitarUtils.humanToIndex(it) }
-                        if (idx != null) Pair(idx, sf.second) else null
-                    }
-                    addStringUsage(chordIndexed?.first, chordIndexed?.second, durationSec)
+                    val chordHuman = note.safeTabPositions.getOrNull(chordIndex) ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)
+                    addStringUsageHuman(chordHuman?.first, chordHuman?.second, durationSec)
                 }
             }
         }
@@ -190,6 +184,7 @@ internal fun computeStatsForIdeas(ideas: List<MelodyIdea>): StatsUiState {
     val mostUsedStringIndex = notesPerString.indices
         .maxByOrNull { notesPerString[it] }
         ?.takeIf { notesPerString[it] > 0 }
+        ?.let { GuitarUtils.indexToHuman(it) }
 
     val mostCommonFret = fretCounts.maxByOrNull { it.value }?.key
     val mostActiveDay = dayCounts.maxByOrNull { it.value }?.key ?: "-"
@@ -849,8 +844,7 @@ private fun StringBarSection(
 @Composable
 private fun FunFactsCard(stats: StatsUiState) {
     val mostUsedString = stats.mostUsedStringIndex
-        ?.takeIf { it in GuitarUtils.STRINGS.indices }
-        ?.let { GuitarUtils.STRINGS[it].name }
+        ?.let { human -> com.notenotes.util.GuitarUtils.humanToIndex(human)?.let { idx -> GuitarUtils.STRINGS[idx].name } }
         ?: "-"
 
     val mostCommonFret = stats.mostCommonFret?.toString() ?: "-"

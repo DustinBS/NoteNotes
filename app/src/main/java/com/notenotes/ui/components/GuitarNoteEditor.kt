@@ -65,15 +65,17 @@ fun GuitarNoteEditor(
         }
 
         fun formatEntryAnnotated(pitch: Int, stringIndex: Int, fret: Int, isStrikethrough: Boolean = false): AnnotatedString {
-            val rawLabel = GuitarUtils.STRINGS.getOrNull(stringIndex)?.label ?: "?"
+            // Accept either a 0-based index or a 1-based human string number for `stringIndex`.
+            val idx = com.notenotes.util.GuitarUtils.rawToIndex(stringIndex) ?: 0
+            val rawLabel = GuitarUtils.STRINGS.getOrNull(idx)?.label ?: "?"
             val stringLabel = normalizedStringLabel(rawLabel)
-            val stringNumber = (GuitarUtils.STRINGS.size - stringIndex).coerceAtLeast(1)
+            val stringNumber = com.notenotes.util.GuitarUtils.indexToHuman(idx)
             val sharpNames = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
             val noteIndex = pitch % 12
             val octave = (pitch / 12) - 1
             val noteName = "${sharpNames[noteIndex]}$octave"
             // Lighten fill color so outlined rendering stands out; keep font weight Normal
-            val stringColor = if (stringIndex in GuitarUtils.STRINGS.indices && !isStrikethrough) ColorUtils.lightenColor(Color(GuitarUtils.STRINGS[stringIndex].colorArgb)) else Color.Unspecified
+            val stringColor = if (idx in GuitarUtils.STRINGS.indices && !isStrikethrough) ColorUtils.lightenColor(Color(GuitarUtils.STRINGS[idx].colorArgb)) else Color.Unspecified
             val textDeco = if (isStrikethrough) TextDecoration.LineThrough else TextDecoration.None
             val textWeight = FontWeight.Normal
             
@@ -90,28 +92,29 @@ fun GuitarNoteEditor(
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             for (index in GuitarUtils.STRINGS.indices.reversed()) {
                 val gs = GuitarUtils.STRINGS[index]
-                val rowSelected = index == state.selectedStringIndex
+                val humanForIndex = GuitarUtils.indexToHuman(index)
+                val rowSelected = humanForIndex == state.selectedStringIndex
                 val sColor = Color(gs.colorArgb)
 
-                val currentChordIndex = state.editableChordPositions.indexOfFirst { it.first == index }
+                val currentChordIndex = state.editableChordPositions.indexOfFirst { it.first == humanForIndex }
                 
                 val currentEntry = when {
-                    hasSelectedNote && index == state.editedPrimaryString -> Triple(state.editedPrimaryMidi, state.editedPrimaryString, state.editedPrimaryFret)
+                    hasSelectedNote && humanForIndex == state.editedPrimaryString -> Triple(state.editedPrimaryMidi, state.editedPrimaryString, state.editedPrimaryFret)
                     currentChordIndex >= 0 -> {
                         val sf = state.editableChordPositions[currentChordIndex]
-                        val pitch = state.editableChordPitches.getOrElse(currentChordIndex) { GuitarUtils.toMidi(GuitarUtils.indexToHuman(sf.first), sf.second) }
+                        val pitch = state.editableChordPitches.getOrElse(currentChordIndex) { GuitarUtils.toMidi(sf.first, sf.second) }
                         Triple(pitch, sf.first, sf.second)
                     }
-                    !hasSelectedNote && index == state.selectedStringIndex -> Triple(GuitarUtils.toMidi(GuitarUtils.indexToHuman(state.selectedStringIndex), state.selectedFret), state.selectedStringIndex, state.selectedFret)
+                    !hasSelectedNote && humanForIndex == state.selectedStringIndex -> Triple(GuitarUtils.toMidi(state.selectedStringIndex, state.selectedFret), state.selectedStringIndex, state.selectedFret)
                     else -> null
                 }
 
-                val originalChordIndex = state.originalChordPositions.indexOfFirst { it.first == index }
+                val originalChordIndex = state.originalChordPositions.indexOfFirst { it.first == humanForIndex }
                 val originalEntry = when {
-                    hasSelectedNote && index == state.originalPrimaryString -> Triple(state.originalPrimaryMidi, state.originalPrimaryString, state.originalPrimaryFret)
+                    hasSelectedNote && humanForIndex == state.originalPrimaryString -> Triple(state.originalPrimaryMidi, state.originalPrimaryString, state.originalPrimaryFret)
                     originalChordIndex >= 0 -> {
                         val sf = state.originalChordPositions[originalChordIndex]
-                        val pitch = state.originalChordPitches.getOrElse(originalChordIndex) { GuitarUtils.toMidi(GuitarUtils.indexToHuman(sf.first), sf.second) }
+                        val pitch = state.originalChordPitches.getOrElse(originalChordIndex) { GuitarUtils.toMidi(sf.first, sf.second) }
                         Triple(pitch, sf.first, sf.second)
                     }
                     else -> null
@@ -120,27 +123,27 @@ fun GuitarNoteEditor(
                 val isActive = currentEntry != null
                 val changed = hasSelectedNote && currentEntry != originalEntry
                 val rowHighlighted = isActive
-                val canRemove = hasSelectedNote && (currentChordIndex >= 0 || index == state.editedPrimaryString)
+                val canRemove = hasSelectedNote && (currentChordIndex >= 0 || humanForIndex == state.editedPrimaryString)
 
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            val existingChordIndex = state.editableChordPositions.indexOfFirst { it.first == index }
+                            val existingChordIndex = state.editableChordPositions.indexOfFirst { it.first == humanForIndex }
                             when {
-                                hasSelectedNote && index == state.editedPrimaryString -> {
+                                hasSelectedNote && humanForIndex == state.editedPrimaryString -> {
                                     state.selectPrimaryNote()
                                 }
                                 hasSelectedNote && existingChordIndex >= 0 -> {
                                     state.selectChordNote(existingChordIndex)
                                 }
                                 hasSelectedNote -> {
-                                    // Add new chord note
-                                    state.addChordNote(index, state.selectedFret)
+                                    // Add new chord note (human string number expected)
+                                    state.addChordNote(humanForIndex, state.selectedFret)
                                 }
                                 else -> {
-                                    state.selectedStringIndex = index
-                                    state.updateSelectedStringFret(index, state.selectedFret)
+                                    state.selectedStringIndex = humanForIndex
+                                    state.updateSelectedStringFret(humanForIndex, state.selectedFret)
                                 }
                             }
                         },
@@ -191,12 +194,12 @@ fun GuitarNoteEditor(
                                             add(Triple(state.editedPrimaryMidi!!, state.editedPrimaryString!!, state.editedPrimaryFret!!))
                                         }
                                         state.editableChordPositions.forEachIndexed { chordIdx, sf ->
-                                                val pitch = GuitarUtils.toMidi(GuitarUtils.indexToHuman(sf.first), sf.second)
+                                            val pitch = GuitarUtils.toMidi(sf.first, sf.second)
                                             add(Triple(pitch, sf.first, sf.second))
                                         }
                                     }
                                     stagedEntries.firstOrNull { staged ->
-                                        staged.second != index && staged.first == originalEntry.first
+                                        staged.second != humanForIndex && staged.first == originalEntry.first
                                     }
                                 }
 
@@ -236,13 +239,13 @@ fun GuitarNoteEditor(
                                     .size(24.dp)
                                     .clip(CircleShape)
                                     .clickable {
-                                        if (index == state.editedPrimaryString) {
+                                        if (humanForIndex == state.editedPrimaryString) {
                                             val promoted = state.removePrimaryNote()
                                             if (!promoted) {
                                                 onDeleteWholeNoteWarning()
                                             }
                                         } else {
-                                            val cIndex = state.editableChordPositions.indexOfFirst { it.first == index }
+                                            val cIndex = state.editableChordPositions.indexOfFirst { it.first == humanForIndex }
                                             if (cIndex >= 0) {
                                                 state.removeChordNote(cIndex)
                                             }

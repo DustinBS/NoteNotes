@@ -93,8 +93,12 @@ object NoteTextUtils {
         saturated: Boolean = false
     ) = buildAnnotatedString {
         val entries = buildPitchEntries(note)
+        // Normalize the requested string identifier (accept 0-based index or 1-based human).
+        // Prefer a raw 0-based index when the caller passes an index directly; otherwise
+        // fall back to the more permissive raw->index helper which prefers human mapping.
+        val targetIdx = if (targetStringIndex in GuitarUtils.STRINGS.indices) targetStringIndex else com.notenotes.util.GuitarUtils.rawToIndex(targetStringIndex) ?: 0
         // Find all entries that map to the requested string index (usually 0 or 1 match)
-        val matches = entries.filter { it.second == targetStringIndex }
+        val matches = entries.filter { it.second == targetIdx }
         if (matches.isEmpty()) return@buildAnnotatedString
 
         matches.forEachIndexed { mi, (pitch, stringIndex, fret) ->
@@ -149,7 +153,11 @@ object NoteTextUtils {
         saturated: Boolean = false
     ) = buildAnnotatedString {
         
-        val baseStringColor = if (stringIndex in GuitarUtils.STRINGS.indices) Color(GuitarUtils.STRINGS[stringIndex].colorArgb) else Color.Unspecified
+        // Normalize incoming string identifier (accept 0-based index or 1-based human).
+        // If the caller already passed a 0-based index, prefer it to avoid
+        // misinterpreting ambiguous values (e.g. 5 which could be human 5 or index 5).
+        val idx = if (stringIndex in GuitarUtils.STRINGS.indices) stringIndex else com.notenotes.util.GuitarUtils.rawToIndex(stringIndex) ?: 0
+        val baseStringColor = if (idx in GuitarUtils.STRINGS.indices) Color(GuitarUtils.STRINGS[idx].colorArgb) else Color.Unspecified
         val stringColor = if (isStrikethrough) Color.Gray
         else if (baseStringColor != Color.Unspecified) {
             if (saturated) baseStringColor else ColorUtils.lightenColor(baseStringColor)
@@ -168,7 +176,11 @@ object NoteTextUtils {
             else -> 9.sp
         }
 
-        val midi = GuitarUtils.toMidi(GuitarUtils.indexToHuman(stringIndex), fret)
+        // `idx` is already normalized above; compute MIDI from it.
+        // `GuitarUtils.toMidi` prefers human 1-based values when ambiguous,
+        // so convert the internal 0-based `idx` back to a human string number
+        // to ensure correct MIDI computation.
+        val midi = GuitarUtils.toMidi(GuitarUtils.indexToHuman(idx), fret)
 
         withStyle(
             SpanStyle(

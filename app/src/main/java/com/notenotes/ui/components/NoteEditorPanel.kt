@@ -35,9 +35,9 @@ import com.notenotes.utils.NoteTextUtils
  * Represents a single note being built in the editor.
  */
 data class EditorNote(
-    val stringIndex: Int,  // 0-based index into GuitarUtils.STRINGS
+    val stringIndex: Int,  // 1-based human guitar string number (1 = High E, 6 = Low E)
     val fret: Int,
-    val midiPitch: Int = GuitarUtils.toMidi(GuitarUtils.indexToHuman(stringIndex), fret)
+    val midiPitch: Int = GuitarUtils.toMidi(stringIndex, fret)
 )
 
 /**
@@ -99,9 +99,10 @@ fun NoteEditorPanel(
                         ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { Pair(it.first, it.second) }
                         ?: Pair(0, 0)
                     val rawFirst = rawPos.first
+                    // Prefer interpreting 1..N as human 1-based string numbers when ambiguous.
                     val normIdx = when {
-                        rawFirst in GuitarUtils.STRINGS.indices -> rawFirst
                         rawFirst in 1..GuitarUtils.STRINGS.size -> com.notenotes.util.GuitarUtils.humanToIndex(rawFirst) ?: 0
+                        rawFirst in GuitarUtils.STRINGS.indices -> rawFirst
                         else -> com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { com.notenotes.util.GuitarUtils.humanToIndex(it.first) ?: 0 } ?: 0
                     }
                     val pos = Pair(normIdx, rawPos.second)
@@ -275,10 +276,10 @@ fun NoteEditorPanel(
                     ) {
                         Text("Confirm", fontSize = 11.sp, maxLines = 1)
                     }
-                } else {
+                    } else {
                     Button(
                         onClick = {
-                            val targetMidi = GuitarUtils.toMidi(GuitarUtils.indexToHuman(state.selectedStringIndex), state.selectedFret)
+                            val targetMidi = GuitarUtils.toMidi(state.selectedStringIndex, state.selectedFret)
                             val pairs = listOf(Pair(targetMidi, Pair(state.selectedStringIndex, state.selectedFret)))
                             onAddNote(pairs)
                         },
