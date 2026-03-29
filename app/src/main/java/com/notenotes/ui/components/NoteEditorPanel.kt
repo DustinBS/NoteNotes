@@ -82,35 +82,30 @@ fun NoteEditorPanel(
                 val newPitches = listOf(state.editedPrimaryMidi) + state.editableChordPitches
                 val newPositions = listOf(Pair(state.editedPrimaryString, state.editedPrimaryFret)) + state.editableChordPositions
 
-                // Map by guitar string index -> tabPosition for old and new chords
+                // Map by 0-based guitar string index -> tabPosition for old and new chords
                 val oldMap = linkedMapOf<Int, Pair<Int, Int>>()
                 selectedNote.pitches.forEachIndexed { idx, pitch ->
-                    val rawPos = selectedNote.safeTabPositions.getOrNull(idx) ?: com.notenotes.util.GuitarUtils.fromMidi(pitch) ?: Pair(0, 0)
-                    val rawIdx = rawPos.first
-                    val normIdx = when {
-                        rawIdx in 0 until GuitarUtils.STRINGS.size -> rawIdx
-                        rawIdx in 1..GuitarUtils.STRINGS.size -> com.notenotes.util.GuitarUtils.humanToIndex(rawIdx) ?: 0
-                        else -> com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { com.notenotes.util.GuitarUtils.humanToIndex(it.first) ?: 0 } ?: 0
-                    }
-                    val pos = Pair(normIdx, rawPos.second)
-                    if (!oldMap.containsKey(normIdx)) {
-                        oldMap[normIdx] = pos
-                    }
+                    // Prefer the index-aligned view from the model; fall back to fromMidi()
+                    val rawPosIndex = selectedNote.safeTabPositionsAsIndex.getOrNull(idx)
+                        ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { Pair(com.notenotes.util.GuitarUtils.rawToIndex(it.first) ?: 0, it.second) }
+                        ?: Pair(0, 0)
+                    val normIdx = rawPosIndex.first
+                    if (!oldMap.containsKey(normIdx)) oldMap[normIdx] = rawPosIndex
                 }
 
                 val newMap = linkedMapOf<Int, Pair<Int, Int>>()
                 newPitches.forEachIndexed { idx, pitch ->
-                    val rawPos = newPositions.getOrNull(idx) ?: com.notenotes.util.GuitarUtils.fromMidi(pitch) ?: Pair(0, 0)
-                    val rawIdx = rawPos.first
+                    val rawPos = newPositions.getOrNull(idx)
+                        ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { Pair(it.first, it.second) }
+                        ?: Pair(0, 0)
+                    val rawFirst = rawPos.first
                     val normIdx = when {
-                        rawIdx in 0 until GuitarUtils.STRINGS.size -> rawIdx
-                        rawIdx in 1..GuitarUtils.STRINGS.size -> com.notenotes.util.GuitarUtils.humanToIndex(rawIdx) ?: 0
+                        rawFirst in GuitarUtils.STRINGS.indices -> rawFirst
+                        rawFirst in 1..GuitarUtils.STRINGS.size -> com.notenotes.util.GuitarUtils.humanToIndex(rawFirst) ?: 0
                         else -> com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { com.notenotes.util.GuitarUtils.humanToIndex(it.first) ?: 0 } ?: 0
                     }
                     val pos = Pair(normIdx, rawPos.second)
-                    if (!newMap.containsKey(normIdx)) {
-                        newMap[normIdx] = pos
-                    }
+                    if (!newMap.containsKey(normIdx)) newMap[normIdx] = pos
                 }
 
                 val unionStrings = (oldMap.keys + newMap.keys).toSortedSet()
@@ -120,7 +115,7 @@ fun NoteEditorPanel(
                     val oldPos = oldMap[strIdx]
                     val newPos = newMap[strIdx]
 
-                        if (oldPos != null && newPos != null && oldPos == newPos) {
+                    if (oldPos != null && newPos != null && oldPos == newPos) {
                         map[strIdx] = NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, oldPos.second, isStrikethrough = false)
                     } else {
                         val oldAnnotated = if (oldPos != null) {

@@ -91,17 +91,9 @@ class RealAudioDiagnosticTest {
         )
     }
 
-    /** Print detailed diagnostics for a test run */
+    /** No-op in test runs to avoid noisy stdout output. */
     private fun printDiagnostics(testName: String, fileName: String, expected: String, output: PipelineOutput) {
-        println("═══════════════════════════════════════════════════")
-        println("TEST: $testName")
-        println("FILE: $fileName")
-        println("EXPECTED: $expected")
-        println("ACTUAL:   ${output.noteCount} notes → ${output.noteNames}")
-        output.noteNames.forEachIndexed { i, name ->
-            println("  Note $i: $name (MIDI ${output.midiNotes[i]}) chord=${output.chordNames[i] ?: "none"}")
-        }
-        println("═══════════════════════════════════════════════════")
+        // Intentionally left blank for CI-friendly test runs.
     }
 
     /**
@@ -109,9 +101,7 @@ class RealAudioDiagnosticTest {
      * but does not fail the test.
      */
     private fun warnIfFalse(condition: Boolean, message: String) {
-        if (!condition) {
-            println("⚠️ INFO-ONLY: $message")
-        }
+        // No-op informational warnings in CI-friendly test runs.
     }
 
     // ===== Single Note Tests =====
@@ -292,12 +282,10 @@ class RealAudioDiagnosticTest {
     fun diagnose_confidenceFiltering() {
         val samples = loadWavSamples("low_e2.wav")
         val thresholds = listOf(0.0, 0.1, 0.2, 0.3, 0.5, 0.6, 0.8)
-        println("\n═══ Confidence Threshold Sweep (low_e2.wav) ═══")
         val countByThreshold = thresholds.map { threshold ->
             val pipeline = TranscriptionPipeline(minNoteConfidence = threshold)
             val result = pipeline.process(samples)
             val notes = result.notes.map { PitchUtils.midiToNoteName(it.pitches.first()) }
-            println("  threshold=$threshold → ${result.notes.size} notes: $notes")
             threshold to result.notes.size
         }
         assertTrue(
@@ -318,16 +306,9 @@ class RealAudioDiagnosticTest {
             "c_major.wav" to "Cmaj",
             "open_strings.wav" to "E2→E4"
         )
-        println("\n═══════════════════════════════════════════════════")
-        println("               ALGORITHM RESULTS OVERVIEW")
-        println("═══════════════════════════════════════════════════")
-        println(String.format("%-20s %-10s %-8s %s", "File", "Expected", "Count", "Detected"))
-        println("─".repeat(60))
         for ((file, expected) in files) {
             val output = runPipeline(file)
-            val detected = output.noteNames.joinToString(", ")
-            println(String.format("%-20s %-10s %-8d %s", file, expected, output.noteCount, detected))
+            // informational-only: no stdout printed in CI runs
         }
-        println("═══════════════════════════════════════════════════")
     }
 }

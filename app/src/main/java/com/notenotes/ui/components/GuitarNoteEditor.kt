@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.notenotes.util.GuitarUtils
 import com.notenotes.util.PitchUtils
+import com.notenotes.util.ColorUtils
 
 /**
  * A shared UI component for editing a single note or chord on a guitar.
@@ -72,16 +73,7 @@ fun GuitarNoteEditor(
             val octave = (pitch / 12) - 1
             val noteName = "${sharpNames[noteIndex]}$octave"
             // Lighten fill color so outlined rendering stands out; keep font weight Normal
-            fun lightenColor(c: Color, amount: Float): Color {
-                return Color(
-                    red = (c.red + (1f - c.red) * amount).coerceIn(0f, 1f),
-                    green = (c.green + (1f - c.green) * amount).coerceIn(0f, 1f),
-                    blue = (c.blue + (1f - c.blue) * amount).coerceIn(0f, 1f),
-                    alpha = c.alpha
-                )
-            }
-            val LIGHTEN_AMOUNT = 0.36f
-            val stringColor = if (stringIndex in GuitarUtils.STRINGS.indices && !isStrikethrough) lightenColor(Color(GuitarUtils.STRINGS[stringIndex].colorArgb), LIGHTEN_AMOUNT) else Color.Unspecified
+            val stringColor = if (stringIndex in GuitarUtils.STRINGS.indices && !isStrikethrough) ColorUtils.lightenColor(Color(GuitarUtils.STRINGS[stringIndex].colorArgb)) else Color.Unspecified
             val textDeco = if (isStrikethrough) TextDecoration.LineThrough else TextDecoration.None
             val textWeight = FontWeight.Normal
             

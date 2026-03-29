@@ -65,11 +65,7 @@ class AlgorithmComparisonTest {
 
     @Test
     fun compareRawPitchDetection_allAlgorithms() {
-        println("\n" + "=".repeat(90))
-        println("  RAW PITCH DETECTION COMPARISON")
-        println("=".repeat(90))
-        println(String.format("%-12s | %-8s | %-15s | %-15s | %-15s", "File", "Expected", "YIN", "MPM", "HPS"))
-        println("-".repeat(90))
+        // Suppress verbose algorithm comparison printing in tests.
 
         val yin = YinPitchDetector()
         val mpm = McLeodPitchDetector()
@@ -90,26 +86,16 @@ class AlgorithmComparisonTest {
             if (yinOk) yinCorrect++
             if (mpmOk) mpmCorrect++
             if (hpsOk) hpsCorrect++
-            println(String.format("%-12s | %-8s | %s %-5s c=%.2f | %s %-5s c=%.2f | %s %-5s c=%.2f",
-                tc.file.removeSuffix(".wav"), tc.expectedName,
-                if (yinOk) "Y" else "N", yinName, yinConf,
-                if (mpmOk) "Y" else "N", mpmName, mpmConf,
-                if (hpsOk) "Y" else "N", hpsName, hpsConf))
+            // informational-only: no per-test printing in CI runs
         }
-        println("-".repeat(90))
-        println(String.format("%-12s | %-8s | %-15s | %-15s | %-15s",
-            "SCORE", "${SINGLE_NOTE_TESTS.size} tests",
-            "$yinCorrect/${SINGLE_NOTE_TESTS.size}", "$mpmCorrect/${SINGLE_NOTE_TESTS.size}", "$hpsCorrect/${SINGLE_NOTE_TESTS.size}"))
-        println("=".repeat(90))
+        // summary suppressed in tests
         val bestScore = maxOf(yinCorrect, mpmCorrect, hpsCorrect)
         assertTrue("All algorithms performed poorly. Best was $bestScore/${SINGLE_NOTE_TESTS.size}", bestScore >= 3)
     }
 
     @Test
     fun consensusPitchDetection_majorityVote() {
-        println("\n" + "=".repeat(70))
-        println("  CONSENSUS PITCH DETECTION (Majority Vote)")
-        println("=".repeat(70))
+        // Suppress consensus printing in tests
 
         val yin = YinPitchDetector()
         val mpm = McLeodPitchDetector()
@@ -126,11 +112,9 @@ class AlgorithmComparisonTest {
             val consensusName = if (consensusMidi >= 0) PitchUtils.midiToNoteName(consensusMidi) else "none"
             val isCorrect = kotlin.math.abs(consensusMidi - tc.expectedMidi) <= 1
             if (isCorrect) consensusCorrect++
-            println("  ${if (isCorrect) "Y" else "N"} ${tc.file.removeSuffix(".wav")}: expected=${tc.expectedName} consensus=$consensusName (YIN=${fmtMidi(yinMidi)}, MPM=${fmtMidi(mpmMidi)}, HPS=${fmtMidi(hpsMidi)})")
+            // informational-only: consensus per-test printing suppressed
         }
-        println("-".repeat(70))
-        println("  CONSENSUS SCORE: $consensusCorrect/${SINGLE_NOTE_TESTS.size}")
-        println("=".repeat(70))
+        // consensus summary suppressed
         assertTrue("Consensus should get at least 3/6 correct but got $consensusCorrect", consensusCorrect >= 3)
     }
 
@@ -158,7 +142,7 @@ class AlgorithmComparisonTest {
         assertTrue("MPM should detect pitched frames for low E2", pitched.isNotEmpty())
         val (midi, _, _) = getDominantPitch(frames)
         val name = if (midi >= 0) PitchUtils.midiToNoteName(midi) else "none"
-        println("MPM low_e2.wav: dominant pitch = $name (MIDI $midi), ${pitched.size} pitched frames")
+        // informational-only: suppressed detailed output
     }
 
     @Test
@@ -170,6 +154,6 @@ class AlgorithmComparisonTest {
         assertTrue("HPS should detect pitched frames for low E2", pitched.isNotEmpty())
         val (midi, _, _) = getDominantPitch(frames)
         val name = if (midi >= 0) PitchUtils.midiToNoteName(midi) else "none"
-        println("HPS low_e2.wav: dominant pitch = $name (MIDI $midi), ${pitched.size} pitched frames")
+        // informational-only: suppressed detailed output
     }
 }

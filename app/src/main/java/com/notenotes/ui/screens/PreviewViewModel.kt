@@ -572,10 +572,11 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val primaryMidi = primaryEntry.first
         val primaryStringRaw = primaryEntry.second.first
         val primaryFret = primaryEntry.second.second
-        // Normalize provided string identifier to canonical human 1-based numbering
+        // Normalize provided string identifier to canonical human 1-based numbering.
+        // Prefer treating values as 0-based indices when they fall in that range (UI/editor callers pass indices).
         val primaryString = when {
-            primaryStringRaw in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> primaryStringRaw
             primaryStringRaw in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(primaryStringRaw)
+            primaryStringRaw in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> primaryStringRaw
             else -> primaryStringRaw.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
         }
         // Create chord entries sorted by MIDI pitch (so chordPitches and chordStringFrets stay in sync)
@@ -584,12 +585,12 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         } else emptyList()
         val chordPitches = chordEntries.map { it.first }
         // Normalize chord string identifiers to canonical human numbering
-        val chordStringFrets = chordEntries.map { ce ->
+            val chordStringFrets = chordEntries.map { ce ->
             val raw = ce.second.first
             val fret = ce.second.second
             val human = when {
-                raw in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> raw
                 raw in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(raw)
+                raw in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> raw
                 else -> raw.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
             }
             Pair(human, fret)
@@ -681,10 +682,11 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val currentNotes = _notesList.value.toMutableList()
         if (index !in currentNotes.indices) return
         val oldNote = currentNotes[index]
-        // Normalize supplied string identifier (may be 0-based index or 1-based human)
+        // Normalize supplied string identifier (may be 0-based index or 1-based human).
+        // Prefer index-first normalization for values coming from UI/editor state.
         val human = when {
-            guitarString in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> guitarString
             guitarString in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(guitarString)
+            guitarString in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> guitarString
             else -> guitarString.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
         }
         val newMidi = com.notenotes.util.GuitarUtils.toMidi(human, guitarFret)
@@ -722,8 +724,8 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val primaryTabRaw = fullStringFrets.first()
         val primaryTab = Pair(
             when {
-                primaryTabRaw.first in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> primaryTabRaw.first
                 primaryTabRaw.first in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(primaryTabRaw.first)
+                primaryTabRaw.first in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> primaryTabRaw.first
                 else -> primaryTabRaw.first.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
             }, primaryTabRaw.second
         )
@@ -734,8 +736,8 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
             .map { pair ->
                 val raw = pair.second
                 val human = when {
-                    raw.first in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> raw.first
                     raw.first in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(raw.first)
+                    raw.first in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> raw.first
                     else -> raw.first.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
                 }
                 Pair(pair.first, Pair(human, raw.second))

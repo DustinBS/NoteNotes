@@ -9,6 +9,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
 import com.notenotes.model.MusicalNote
 import com.notenotes.util.GuitarUtils
+import com.notenotes.util.ColorUtils
 
 object NoteTextUtils {
     private fun buildPitchEntries(note: MusicalNote): List<Triple<Int, Int, Int>> {
@@ -37,23 +38,12 @@ object NoteTextUtils {
     ) = buildAnnotatedString {
         val entries = buildPitchEntries(note)
         entries.forEachIndexed { idx, (pitch, stringIndex, fret) ->
-            // Lighten the base string color for the glyph fill so the outline remains visually dominant
-            fun lightenColor(c: Color, amount: Float): Color {
-                return Color(
-                    red = (c.red + (1f - c.red) * amount).coerceIn(0f, 1f),
-                    green = (c.green + (1f - c.green) * amount).coerceIn(0f, 1f),
-                    blue = (c.blue + (1f - c.blue) * amount).coerceIn(0f, 1f),
-                    alpha = c.alpha
-                )
-            }
-
-            val LIGHTEN_AMOUNT = 0.36f
             val baseStringColor = if (stringIndex in GuitarUtils.STRINGS.indices) Color(GuitarUtils.STRINGS[stringIndex].colorArgb) else Color.Unspecified
             // When `saturated` is requested (Notes tab), prefer the base color so reds/oranges/yellows
             // remain vivid. Otherwise use the lighter variant used elsewhere for contrast.
             val stringColor = if (isStrikethrough) Color.Gray
             else if (baseStringColor != Color.Unspecified) {
-                if (saturated) baseStringColor else lightenColor(baseStringColor, LIGHTEN_AMOUNT)
+                if (saturated) baseStringColor else ColorUtils.lightenColor(baseStringColor)
             } else Color.Unspecified
 
             val textDeco = if (isStrikethrough) androidx.compose.ui.text.style.TextDecoration.LineThrough else null
@@ -107,22 +97,12 @@ object NoteTextUtils {
         val matches = entries.filter { it.second == targetStringIndex }
         if (matches.isEmpty()) return@buildAnnotatedString
 
-        fun lightenColor(c: Color, amount: Float): Color {
-            return Color(
-                red = (c.red + (1f - c.red) * amount).coerceIn(0f, 1f),
-                green = (c.green + (1f - c.green) * amount).coerceIn(0f, 1f),
-                blue = (c.blue + (1f - c.blue) * amount).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-
-        val LIGHTEN_AMOUNT = 0.36f
-
         matches.forEachIndexed { mi, (pitch, stringIndex, fret) ->
+        
             val baseStringColor = if (stringIndex in GuitarUtils.STRINGS.indices) Color(GuitarUtils.STRINGS[stringIndex].colorArgb) else Color.Unspecified
             val stringColor = if (isStrikethrough) Color.Gray
             else if (baseStringColor != Color.Unspecified) {
-                if (saturated) baseStringColor else lightenColor(baseStringColor, LIGHTEN_AMOUNT)
+                if (saturated) baseStringColor else ColorUtils.lightenColor(baseStringColor)
             } else Color.Unspecified
 
             val textDeco = if (isStrikethrough) androidx.compose.ui.text.style.TextDecoration.LineThrough else null
@@ -168,20 +148,11 @@ object NoteTextUtils {
         isPendingSmall: Boolean = false,
         saturated: Boolean = false
     ) = buildAnnotatedString {
-        fun lightenColor(c: Color, amount: Float): Color {
-            return Color(
-                red = (c.red + (1f - c.red) * amount).coerceIn(0f, 1f),
-                green = (c.green + (1f - c.green) * amount).coerceIn(0f, 1f),
-                blue = (c.blue + (1f - c.blue) * amount).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-
-        val LIGHTEN_AMOUNT = 0.36f
+        
         val baseStringColor = if (stringIndex in GuitarUtils.STRINGS.indices) Color(GuitarUtils.STRINGS[stringIndex].colorArgb) else Color.Unspecified
         val stringColor = if (isStrikethrough) Color.Gray
         else if (baseStringColor != Color.Unspecified) {
-            if (saturated) baseStringColor else lightenColor(baseStringColor, LIGHTEN_AMOUNT)
+            if (saturated) baseStringColor else ColorUtils.lightenColor(baseStringColor)
         } else Color.Unspecified
 
         val textDeco = if (isStrikethrough) androidx.compose.ui.text.style.TextDecoration.LineThrough else null

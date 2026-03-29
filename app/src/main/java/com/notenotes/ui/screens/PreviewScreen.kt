@@ -1120,21 +1120,6 @@ fun PreviewScreen(
                             printPending = false
                             sheetWebView?.let { wv ->
                                 android.util.Log.i("NNPdf", "Print ready: WebView width=${wv.width}, height=${wv.height}")
-                                // Capture debug dump and write to file for diagnostics
-                                wv.evaluateJavascript("dumpPdfDebugInfo(false)") { debugJson ->
-                                    android.util.Log.i("NNPdf", "Pre-print debug: $debugJson")
-                                    try {
-                                        val debugFile = java.io.File(
-                                            android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS),
-                                            "NoteNotes_PDF_Debug.txt"
-                                        )
-                                        debugFile.parentFile?.mkdirs()
-                                        debugFile.writeText("PDF Debug Dump - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date())}\n\n$debugJson")
-                                        android.util.Log.i("NNPdf", "Debug file written: ${debugFile.absolutePath}")
-                                    } catch (e: Exception) {
-                                        android.util.Log.w("NNPdf", "Could not write debug file: ${e.message}")
-                                    }
-                                }
                                 val printManager = context.getSystemService(android.content.Context.PRINT_SERVICE) as android.print.PrintManager
                                 val adapter = wv.createPrintDocumentAdapter(idea?.title ?: "Sheet Music")
                                 // Margins and width from PdfConstants — single source of truth

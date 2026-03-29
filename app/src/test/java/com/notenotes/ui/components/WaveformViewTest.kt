@@ -23,8 +23,6 @@ class WaveformViewTest {
         val overlays = computeNoteOverlays(listOf(note), tempoBpm = 120, durationMs = 1000, paddedDurationSec = 1f)
         assertEquals(1, overlays.size)
         val labelMap = overlays[0].labelMap
-        // Debugging output for regression: print keys to help diagnose mapping issues
-        println("labelMap keys: ${labelMap.keys}")
         // internal index for string 1 (high E) == 5
         assertTrue("Expected high E (internal index 5) to be present; found keys=${labelMap.keys}", labelMap.containsKey(5))
     }

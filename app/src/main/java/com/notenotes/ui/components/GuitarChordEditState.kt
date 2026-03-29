@@ -101,8 +101,8 @@ class GuitarChordEditState(
      */
     fun addChordNote(stringIndex: Int, fret: Int) {
         val human = when {
-            stringIndex in 1..GuitarUtils.STRINGS.size -> stringIndex
             stringIndex in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(stringIndex)
+            stringIndex in 1..GuitarUtils.STRINGS.size -> stringIndex
             else -> stringIndex.coerceIn(1, GuitarUtils.STRINGS.size)
         }
         val midiPitch = GuitarUtils.toMidi(human, fret)

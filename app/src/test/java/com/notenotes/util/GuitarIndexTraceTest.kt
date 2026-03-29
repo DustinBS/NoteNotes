@@ -12,10 +12,6 @@ class GuitarIndexTraceTest {
 
     @Test
     fun rawToIndex_and_human_mappings() {
-        // Diagnostic prints
-        println("STRINGS (number,openMidi) = ${GuitarUtils.STRINGS.map { Pair(it.number, it.openMidi) }}")
-        println("rawToIndex(0)=${GuitarUtils.rawToIndex(0)} rawToIndex(1)=${GuitarUtils.rawToIndex(1)} rawToIndex(5)=${GuitarUtils.rawToIndex(5)} rawToIndex(6)=${GuitarUtils.rawToIndex(6)}")
-
         assertEquals(0, GuitarUtils.rawToIndex(0))
         // With human-first normalization, raw value 5 (ambiguous) maps to human index -> internal 1
         assertEquals(1, GuitarUtils.rawToIndex(5))
@@ -31,9 +27,6 @@ class GuitarIndexTraceTest {
 
     @Test
     fun toMidi_accepts_both_index_and_human() {
-        println("STRINGS openMidi by index = ${GuitarUtils.STRINGS.map { it.openMidi }}")
-        println("toMidi(0,0)=${GuitarUtils.toMidi(0, 0)} toMidi(1,0)=${GuitarUtils.toMidi(1,0)} toMidi(5,0)=${GuitarUtils.toMidi(5,0)}")
-
         assertEquals(GuitarUtils.STRINGS[0].openMidi + 0, GuitarUtils.toMidi(0, 0))
         // human 1 -> index 5 (high E)
         assertEquals(GuitarUtils.STRINGS[5].openMidi + 0, GuitarUtils.toMidi(1, 0))

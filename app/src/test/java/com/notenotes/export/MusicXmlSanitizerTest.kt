@@ -87,9 +87,6 @@ class MusicXmlSanitizerTest {
         // Voice should be preserved
         assertTrue("Voice preserved", result.contains("<voice>1</voice>"))
 
-        println("=== SANITIZED OUTPUT ===")
-        println(result)
-        println("========================")
     }
 
     @Test
@@ -167,8 +164,6 @@ class MusicXmlSanitizerTest {
         assertTrue("Should have duration 6 (dotted quarter)", result.contains("<duration>6</duration>"))
         assertTrue("Should have duration 1 (16th)", result.contains("<duration>1</duration>"))
 
-        println("=== SANITIZED M6-like ===")
-        println(result)
     }
 
     @Test
