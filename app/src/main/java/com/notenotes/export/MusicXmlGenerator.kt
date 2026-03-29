@@ -3,6 +3,7 @@ package com.notenotes.export
 import com.notenotes.model.MusicalNote
 import com.notenotes.model.TranscriptionResult
 import com.notenotes.util.PitchUtils
+import com.notenotes.util.GuitarUtils
 import java.io.File
 
 /**
@@ -432,8 +433,22 @@ class MusicXmlGenerator {
             // Guitar tablature: <string> and <fret> in <technical>
             if (hasTabSingle) {
                 sb.appendLine("""          <technical>""")
-                // guitarString is 0-based (0=Low E), MusicXML <string> is 1=High E, 6=Low E
-                val stringNum = 6 - tabPos!!.first
+                // tabPositions may be stored either as canonical human 1-based
+                // string numbers (1 = High E) or as 0-based indices (0 = Low E).
+                // MusicXML expects 1..N with 1 = High E. Detect and convert.
+                val rawString = tabPos!!.first
+                val stringNum = when {
+                    // If this is a manually annotated note, prefer interpreting
+                    // small integers as 0-based indices (0 = low E) to match
+                    // internal manual storage conventions.
+                    note.isManual && rawString in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(rawString)
+                    // already human 1-based
+                    rawString in 1..GuitarUtils.STRINGS.size -> rawString
+                    // 0-based index -> convert to human
+                    rawString in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(rawString)
+                    // fallback: clamp into valid range
+                    else -> rawString.coerceIn(1, GuitarUtils.STRINGS.size)
+                }
                 sb.appendLine("""            <string>$stringNum</string>""")
                 sb.appendLine("""            <fret>${tabPos.second}</fret>""")
                 sb.appendLine("""          </technical>""")

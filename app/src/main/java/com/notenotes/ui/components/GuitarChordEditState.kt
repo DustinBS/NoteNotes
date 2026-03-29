@@ -17,34 +17,44 @@ class GuitarChordEditState(
     originalNote: MusicalNote?
 ) {
     // --- Editable state ---
-    var editedPrimaryString by mutableIntStateOf(originalNote?.tabPositions?.firstOrNull()?.first ?: 0)
-    var editedPrimaryFret by mutableIntStateOf(originalNote?.tabPositions?.firstOrNull()?.second ?: 0)
+    // Store UI-facing values as internal 0-based indices (0 = low E)
+    var editedPrimaryString by mutableIntStateOf(originalNote?.safeTabPositionsAsIndex?.firstOrNull()?.first ?: 0)
+    var editedPrimaryFret by mutableIntStateOf(originalNote?.safeTabPositionsAsIndex?.firstOrNull()?.second ?: 0)
     
     val editableChordPitches: SnapshotStateList<Int> = mutableStateListOf()
     val editableChordPositions: SnapshotStateList<Pair<Int, Int>> = mutableStateListOf()
     
     // --- UI interaction state ---
-    var selectedStringIndex by mutableIntStateOf(originalNote?.tabPositions?.firstOrNull()?.first ?: 0)
-    var selectedFret by mutableIntStateOf(originalNote?.tabPositions?.firstOrNull()?.second ?: 0)
+    var selectedStringIndex by mutableIntStateOf(originalNote?.safeTabPositionsAsIndex?.firstOrNull()?.first ?: 0)
+    var selectedFret by mutableIntStateOf(originalNote?.safeTabPositionsAsIndex?.firstOrNull()?.second ?: 0)
     var editingChordPitchIndex by mutableStateOf<Int?>(null)
     
     // --- Original state for change detection ---
-    val originalPrimaryString: Int = originalNote?.tabPositions?.firstOrNull()?.first ?: 0
-    val originalPrimaryFret: Int = originalNote?.tabPositions?.firstOrNull()?.second ?: 0
+    val originalPrimaryString: Int = originalNote?.safeTabPositionsAsIndex?.firstOrNull()?.first ?: 0
+    val originalPrimaryFret: Int = originalNote?.safeTabPositionsAsIndex?.firstOrNull()?.second ?: 0
     val originalPrimaryMidi: Int = originalNote?.pitches?.firstOrNull() ?: 0
     val originalChordPitches: List<Int> = originalNote?.pitches?.drop(1)?.toList() ?: emptyList()
     val originalChordPositions: List<Pair<Int, Int>> = run {
         val note = originalNote ?: return@run emptyList()
         val pitches = note.pitches.drop(1)
-        val tabPos = note.tabPositions.drop(1)
+        // Use the index-aligned view (0-based indices) for original positions
+        val safeTabPos = note.safeTabPositionsAsIndex.drop(1)
         pitches.mapIndexed { i, pitch ->
-            tabPos.getOrNull(i) ?: (GuitarUtils.fromMidi(pitch) ?: Pair(0, 0))
+            val stored = safeTabPos.getOrNull(i)
+            if (stored != null) stored
+            else {
+                val fm = GuitarUtils.fromMidi(pitch)
+                if (fm != null) {
+                    val idx = GuitarUtils.humanToIndex(fm.first) ?: 0
+                    Pair(idx, fm.second)
+                } else Pair(0, 0)
+            }
         }
     }
     
     // --- Derived state ---
     val editedPrimaryMidi: Int
-        get() = GuitarUtils.toMidi(editedPrimaryString, editedPrimaryFret)
+        get() = GuitarUtils.toMidi(GuitarUtils.indexToHuman(editedPrimaryString), editedPrimaryFret)
     
     val hasPendingChanges: Boolean
         get() {
@@ -68,13 +78,19 @@ class GuitarChordEditState(
         originalNote?.let { note ->
             editableChordPitches.addAll(note.pitches.drop(1))
             val pitches = note.pitches.drop(1)
-            val tabPos = note.tabPositions.drop(1)
+            val tabPos = note.safeTabPositionsAsIndex.drop(1)
             pitches.forEachIndexed { i, pitch ->
                 val stored = tabPos.getOrNull(i)
                 if (stored != null) {
                     editableChordPositions.add(stored)
                 } else {
-                    editableChordPositions.add(GuitarUtils.fromMidi(pitch) ?: Pair(0, 0))
+                    val fm = GuitarUtils.fromMidi(pitch)
+                    if (fm != null) {
+                        val idx = GuitarUtils.humanToIndex(fm.first) ?: 0
+                        editableChordPositions.add(Pair(idx, fm.second))
+                    } else {
+                        editableChordPositions.add(Pair(0, 0))
+                    }
                 }
             }
         }
@@ -84,7 +100,12 @@ class GuitarChordEditState(
      * Add a new chord note at the given string and fret.
      */
     fun addChordNote(stringIndex: Int, fret: Int) {
-        val midiPitch = GuitarUtils.toMidi(stringIndex, fret)
+        val human = when {
+            stringIndex in 1..GuitarUtils.STRINGS.size -> stringIndex
+            stringIndex in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(stringIndex)
+            else -> stringIndex.coerceIn(1, GuitarUtils.STRINGS.size)
+        }
+        val midiPitch = GuitarUtils.toMidi(human, fret)
         editableChordPitches.add(midiPitch)
         editableChordPositions.add(Pair(stringIndex, fret))
         editingChordPitchIndex = editableChordPitches.size - 1
@@ -137,7 +158,7 @@ class GuitarChordEditState(
             editedPrimaryString = stringIndex
             editedPrimaryFret = fret
         } else if (idx in editableChordPitches.indices) {
-            val newMidi = GuitarUtils.toMidi(stringIndex, fret)
+            val newMidi = GuitarUtils.toMidi(GuitarUtils.indexToHuman(stringIndex), fret)
             editableChordPitches[idx] = newMidi
             editableChordPositions[idx] = Pair(stringIndex, fret)
         }

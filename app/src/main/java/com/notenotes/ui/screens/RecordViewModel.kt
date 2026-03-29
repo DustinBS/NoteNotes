@@ -303,11 +303,11 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.value = UiState.PAUSED
         _isChanged.value = true
         val recordedLengthMs = getBufferDurationMs(rec.size)
-            if (isSynced.value) {
-                _punchInPositionMs.value = activePunchInMs + recordedLengthMs
-            } else {
-                _punchInPositionMs.value = activePunchInMs
-            }
+        if (isSynced.value) {
+            _punchInPositionMs.value = activePunchInMs + recordedLengthMs
+        } else {
+            _punchInPositionMs.value = activePunchInMs
+        }
         // Force audioPlayer to reload the new buffer on next play
         audioPlayer.stop()
     }

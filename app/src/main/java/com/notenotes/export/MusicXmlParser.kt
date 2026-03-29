@@ -152,7 +152,11 @@ class MusicXmlParser {
                 }
 
                 // Guitar string/fret from <technical>
-                var guitarString: Int? = null
+                // MusicXML <string> is human 1-based (1=High E). Convert to internal
+                // 0-based index (0 = Low E) for MusicalNote.tabPositions so tests
+                // and internal model use consistent indexing.
+                var guitarStringHuman: Int? = null
+                var guitarStringIndex: Int? = null
                 var guitarFret: Int? = null
                 val techNodes = noteEl.getElementsByTagName("technical")
                 if (techNodes.length > 0) {
@@ -160,8 +164,15 @@ class MusicXmlParser {
                     val stringNodes = techEl.getElementsByTagName("string")
                     val fretNodes = techEl.getElementsByTagName("fret")
                     if (stringNodes.length > 0) {
-                        // MusicXML <string> 1=High E, 6=Low E; app uses 0-based (0=Low E)
-                        guitarString = stringNodes.item(0).textContent.trim().toIntOrNull()?.let { 6 - it }
+                        val raw = stringNodes.item(0).textContent.trim().toIntOrNull()
+                        if (raw != null) {
+                            guitarStringHuman = when {
+                                raw in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> raw
+                                raw in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(raw)
+                                else -> raw.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
+                            }
+                            guitarStringIndex = com.notenotes.util.GuitarUtils.humanToIndex(guitarStringHuman)
+                        }
                     }
                     if (fretNodes.length > 0) {
                         guitarFret = fretNodes.item(0).textContent.trim().toIntOrNull()
@@ -185,11 +196,11 @@ class MusicXmlParser {
                             updatedPitches.add(midiPitch)
                             val updatedTabPositions = primary.tabPositions.toMutableList()
 
-                            if (updatedTabPositions.isNotEmpty() || (guitarString != null && guitarFret != null)) {
+                            if (updatedTabPositions.isNotEmpty() || (guitarStringIndex != null && guitarFret != null)) {
                                 while (updatedTabPositions.size < updatedPitches.size - 1) {
-                                    updatedTabPositions.add(Pair(0, 0)) // Pad missing preceding tab info
+                                    updatedTabPositions.add(Pair(0, 0)) // Pad missing preceding tab info (0 = low E index)
                                 }
-                                updatedTabPositions.add(Pair(guitarString ?: 0, guitarFret ?: 0))
+                                updatedTabPositions.add(Pair(guitarStringIndex ?: 0, guitarFret ?: 0))
                             }
 
                             notes[notes.lastIndex] = primary.copy(
@@ -227,8 +238,8 @@ class MusicXmlParser {
                     // fall through to create a new note
                 }
 
-                // New note event
-                val tabPositions = if (guitarString != null && guitarFret != null) listOf(Pair(guitarString, guitarFret)) else emptyList()
+                // New note event — store internal 0-based string indices (0 = Low E)
+                val tabPositions = if (guitarStringIndex != null && guitarFret != null) listOf(Pair(guitarStringIndex, guitarFret)) else emptyList()
                 val note = MusicalNote(
                     pitches = if (isRest) emptyList() else listOf(midiPitch),
                     durationTicks = durationTicks,

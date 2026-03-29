@@ -71,9 +71,19 @@ fun GuitarNoteEditor(
             val noteIndex = pitch % 12
             val octave = (pitch / 12) - 1
             val noteName = "${sharpNames[noteIndex]}$octave"
-            val stringColor = if (stringIndex in GuitarUtils.STRINGS.indices && !isStrikethrough) Color(GuitarUtils.STRINGS[stringIndex].colorArgb) else Color.Unspecified
+            // Lighten fill color so outlined rendering stands out; keep font weight Normal
+            fun lightenColor(c: Color, amount: Float): Color {
+                return Color(
+                    red = (c.red + (1f - c.red) * amount).coerceIn(0f, 1f),
+                    green = (c.green + (1f - c.green) * amount).coerceIn(0f, 1f),
+                    blue = (c.blue + (1f - c.blue) * amount).coerceIn(0f, 1f),
+                    alpha = c.alpha
+                )
+            }
+            val LIGHTEN_AMOUNT = 0.36f
+            val stringColor = if (stringIndex in GuitarUtils.STRINGS.indices && !isStrikethrough) lightenColor(Color(GuitarUtils.STRINGS[stringIndex].colorArgb), LIGHTEN_AMOUNT) else Color.Unspecified
             val textDeco = if (isStrikethrough) TextDecoration.LineThrough else TextDecoration.None
-            val textWeight = if (isStrikethrough) FontWeight.Normal else FontWeight.SemiBold
+            val textWeight = FontWeight.Normal
             
             return buildAnnotatedString {
                 withStyle(SpanStyle(color = stringColor, fontWeight = textWeight, textDecoration = textDeco)) {
@@ -97,10 +107,10 @@ fun GuitarNoteEditor(
                     hasSelectedNote && index == state.editedPrimaryString -> Triple(state.editedPrimaryMidi, state.editedPrimaryString, state.editedPrimaryFret)
                     currentChordIndex >= 0 -> {
                         val sf = state.editableChordPositions[currentChordIndex]
-                        val pitch = state.editableChordPitches.getOrElse(currentChordIndex) { GuitarUtils.toMidi(sf.first, sf.second) }
+                        val pitch = state.editableChordPitches.getOrElse(currentChordIndex) { GuitarUtils.toMidi(GuitarUtils.indexToHuman(sf.first), sf.second) }
                         Triple(pitch, sf.first, sf.second)
                     }
-                    !hasSelectedNote && index == state.selectedStringIndex -> Triple(GuitarUtils.toMidi(state.selectedStringIndex, state.selectedFret), state.selectedStringIndex, state.selectedFret)
+                    !hasSelectedNote && index == state.selectedStringIndex -> Triple(GuitarUtils.toMidi(GuitarUtils.indexToHuman(state.selectedStringIndex), state.selectedFret), state.selectedStringIndex, state.selectedFret)
                     else -> null
                 }
 
@@ -109,7 +119,7 @@ fun GuitarNoteEditor(
                     hasSelectedNote && index == state.originalPrimaryString -> Triple(state.originalPrimaryMidi, state.originalPrimaryString, state.originalPrimaryFret)
                     originalChordIndex >= 0 -> {
                         val sf = state.originalChordPositions[originalChordIndex]
-                        val pitch = state.originalChordPitches.getOrElse(originalChordIndex) { GuitarUtils.toMidi(sf.first, sf.second) }
+                        val pitch = state.originalChordPitches.getOrElse(originalChordIndex) { GuitarUtils.toMidi(GuitarUtils.indexToHuman(sf.first), sf.second) }
                         Triple(pitch, sf.first, sf.second)
                     }
                     else -> null
@@ -189,7 +199,7 @@ fun GuitarNoteEditor(
                                             add(Triple(state.editedPrimaryMidi!!, state.editedPrimaryString!!, state.editedPrimaryFret!!))
                                         }
                                         state.editableChordPositions.forEachIndexed { chordIdx, sf ->
-                                            val pitch = GuitarUtils.toMidi(sf.first, sf.second)
+                                                val pitch = GuitarUtils.toMidi(GuitarUtils.indexToHuman(sf.first), sf.second)
                                             add(Triple(pitch, sf.first, sf.second))
                                         }
                                     }

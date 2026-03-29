@@ -36,6 +36,7 @@ fun TransportControls(
     isWindowLocked: Boolean = false,
     onPanToEditCursor: () -> Unit = {},
     onPanToPlayhead: () -> Unit = {},
+    editCursorFraction: Float? = null,
     onToggleLock: () -> Unit = {},
     // Speed controls
     playbackSpeed: Float = 1f,
@@ -144,9 +145,17 @@ fun TransportControls(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Pan to Edit Cursor
-                IconButton(onClick = onPanToEditCursor, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.Filled.Edit, contentDescription = "Pan to Edit Cursor", modifier = Modifier.size(20.dp))
+                // Pan to Edit Cursor — make button larger and include arrow inside touchable area
+                val windowFractionForEdit = if (durationMs > 0) windowSizeSec / (durationMs / 1000f) else 0f
+                val editDir = if (editCursorFraction == null || windowFractionForEdit <= 0f) null
+                else if (editCursorFraction < windowStartFraction) "<-" else if (editCursorFraction > windowStartFraction + windowFractionForEdit) "->" else null
+                IconButton(onClick = onPanToEditCursor, modifier = Modifier.size(56.dp)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Icon(Icons.Filled.Edit, contentDescription = "Pan to Edit Cursor", modifier = Modifier.size(24.dp))
+                        Spacer(modifier = Modifier.height(2.dp))
+                        if (editDir != null) Text(editDir, style = MaterialTheme.typography.labelSmall, fontSize = 10.sp)
+                        else Spacer(modifier = Modifier.height(10.dp))
+                    }
                 }
 
                 // Play/Pause
@@ -170,9 +179,17 @@ fun TransportControls(
                     )
                 }
 
-                // Pan to Playhead
-                IconButton(onClick = onPanToPlayhead, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = "Pan to Playhead", modifier = Modifier.size(20.dp))
+                // Pan to Playhead — make button larger and include arrow inside touchable area
+                val windowFractionForPlay = if (durationMs > 0) windowSizeSec / (durationMs / 1000f) else 0f
+                val playheadDir = if (windowFractionForPlay <= 0f) null
+                else if (currentProgress < windowStartFraction) "<-" else if (currentProgress > windowStartFraction + windowFractionForPlay) "->" else null
+                IconButton(onClick = onPanToPlayhead, modifier = Modifier.size(56.dp)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = "Pan to Playhead", modifier = Modifier.size(24.dp))
+                        Spacer(modifier = Modifier.height(2.dp))
+                        if (playheadDir != null) Text(playheadDir, style = MaterialTheme.typography.labelSmall, fontSize = 10.sp)
+                        else Spacer(modifier = Modifier.height(10.dp))
+                    }
                 }
 
                 // Lock toggle

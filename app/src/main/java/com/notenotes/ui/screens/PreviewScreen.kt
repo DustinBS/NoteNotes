@@ -64,7 +64,6 @@ fun PreviewScreen(
     val isRetranscribing by viewModel.isRetranscribing.collectAsState()
     val selectedNoteIndex by viewModel.selectedNoteIndex.collectAsState()
     val editCursorFraction by viewModel.editCursorFraction.collectAsState()
-    val isEditorOpen by viewModel.isEditorOpen.collectAsState()
 
     // Window state
     val windowStartFraction by viewModel.windowStartFraction.collectAsState()
@@ -103,7 +102,7 @@ fun PreviewScreen(
     var showInstrumentDialog by remember { mutableStateOf(false) }
     var showSaveAsDialog by remember { mutableStateOf(false) }
     var waveformEditorHasPendingChanges by remember { mutableStateOf(false) }
-    var waveformEditorPendingNoteText by remember { mutableStateOf<androidx.compose.ui.text.AnnotatedString?>(null) }
+    var waveformEditorPendingNoteLines by remember { mutableStateOf<Map<Int, androidx.compose.ui.text.AnnotatedString>?>(null) }
     var showWaveformDiscardDialog by remember { mutableStateOf(false) }
     var pendingWaveformIntent by remember { mutableStateOf<Triple<Int?, Float?, Float?>?>(null) }
     var pendingTabSelection by remember { mutableStateOf<Int?>(null) }
@@ -658,10 +657,14 @@ fun PreviewScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                modifier = Modifier.height(52.dp),
                 title = {
                     Text(
                         text = idea?.title ?: "Preview",
-                        modifier = Modifier.clickable { runGuardedAction { viewModel.openRenameDialog() } }
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .wrapContentHeight(Alignment.CenterVertically)
+                            .clickable { runGuardedAction { viewModel.openRenameDialog() } }
                     )
                 },
                 navigationIcon = {
@@ -727,7 +730,7 @@ fun PreviewScreen(
                                     showMenu = false
                                     sheetWebView?.let { wv ->
                                         // Trigger re-render at print-friendly width
-                                        android.util.Log.i("NNPdf", "PDF export triggered: WebView width=${wv.width}px, height=${wv.height}px, scale=${wv.scale}")
+                                        android.util.Log.i("NNPdf", "PDF export triggered: WebView width=${wv.width}px, height=${wv.height}px, scale=${wv.scaleX}")
                                         printPending = true
                                         // Hide WebView to prevent the visible "flash" of
                                         // bars rearranging during print-width re-render
@@ -1062,24 +1065,30 @@ fun PreviewScreen(
             }
 
             // Tab selector
-            TabRow(selectedTabIndex = selectedTab) {
+            TabRow(
+                selectedTabIndex = selectedTab,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 0.dp, bottom = 6.dp)
+                    .height(40.dp)
+            ) {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { requestTabChange(0) },
-                    text = { Text("Sheet") },
-                    icon = { Icon(Icons.Filled.MusicNote, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    text = { Text("Sheet", style = MaterialTheme.typography.labelSmall) },
+                    icon = { Icon(Icons.Filled.MusicNote, contentDescription = null, modifier = Modifier.size(16.dp)) }
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { requestTabChange(1) },
-                    text = { Text("Notes") },
-                    icon = { Icon(Icons.Filled.TextFields, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    text = { Text("Notes", style = MaterialTheme.typography.labelSmall) },
+                    icon = { Icon(Icons.Filled.TextFields, contentDescription = null, modifier = Modifier.size(16.dp)) }
                 )
                 Tab(
                     selected = selectedTab == 2,
                     onClick = { requestTabChange(2) },
-                    text = { Text("Waveform") },
-                    icon = { Icon(Icons.Filled.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    text = { Text("Waveform", style = MaterialTheme.typography.labelSmall) },
+                    icon = { Icon(Icons.Filled.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp)) }
                 )
             }
 
@@ -1200,7 +1209,7 @@ fun PreviewScreen(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .weight(1f),
+                                .weight(0.25f),
                             selectedNoteIndex = selectedNoteIndex,
                             editCursorFraction = editCursorFraction,
                             onEditIntent = { noteIndex, cursorFraction, seekFraction ->
@@ -1209,7 +1218,7 @@ fun PreviewScreen(
                             windowStartFraction = windowStartFraction,
                             windowSizeSec = windowSizeSec,
                             isMoveMode = isMoveMode,
-                            pendingSelectedNoteText = waveformEditorPendingNoteText,
+                            pendingSelectedNoteLines = waveformEditorPendingNoteLines,
                             onMoveSelectedNote = { noteIndex, newStartFraction ->
                                 viewModel.moveNoteToFraction(noteIndex, newStartFraction)
                             }
@@ -1261,10 +1270,11 @@ fun PreviewScreen(
                                     viewModel.addNote(entries)
                                 }
                             },
-                            onPendingChangesChanged = { hasPendingChanges, pendingText ->
+                            onPendingChangesChanged = { hasPendingChanges, pendingLines ->
                                 waveformEditorHasPendingChanges = hasPendingChanges
-                                waveformEditorPendingNoteText = pendingText
-                            }
+                                waveformEditorPendingNoteLines = pendingLines
+                            },
+                            modifier = Modifier.fillMaxWidth().weight(0.75f)
                         )
                     }
                 }
@@ -1297,6 +1307,7 @@ fun PreviewScreen(
                         viewModel.panWindowTo(playbackProgress)
                     } 
                 },
+                editCursorFraction = editCursorFraction,
                 onToggleLock = { runGuardedAction { viewModel.toggleWindowLock() } },
                 playbackSpeed = playbackSpeed,
                 onSpeedChange = { speed -> runGuardedAction { viewModel.setPlaybackSpeed(speed) } },

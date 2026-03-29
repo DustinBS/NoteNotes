@@ -265,7 +265,7 @@ private fun NoteNameChip(
                 fontWeight = FontWeight.Medium
             )
         } else {
-            val displayText = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotated(note)
+            val displayText = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotated(note, saturated = true)
             Text(
                 text = displayText,
                 fontSize = 12.sp,
@@ -319,20 +319,42 @@ private fun NoteNameRow(
                 modifier = Modifier.weight(1f)
             )
         } else if (note.isChord) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotated(note),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
+            // Render chord as fixed columns per guitar string so identical strings align vertically across rows.
+            Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                val colWidth = 40.dp
+                val maxStrings = com.notenotes.util.GuitarUtils.STRINGS.size
+                for (si in 0 until maxStrings) {
+                    Box(modifier = Modifier.width(colWidth), contentAlignment = Alignment.CenterStart) {
+                        val annotated = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotatedForString(note, si, saturated = true)
+                        if (annotated != null && annotated.text.isNotEmpty()) {
+                            Text(
+                                text = annotated,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
             }
         } else {
-            Text(
-                text = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotated(note),
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
-            )
+            // Render single notes using the same per-string column grid as chords so
+            // single-note rows align vertically with chord rows.
+            Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                val colWidth = 40.dp
+                val maxStrings = com.notenotes.util.GuitarUtils.STRINGS.size
+                for (si in 0 until maxStrings) {
+                    Box(modifier = Modifier.width(colWidth), contentAlignment = Alignment.CenterStart) {
+                        val annotated = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotatedForString(note, si, saturated = true)
+                        if (annotated.text.isNotEmpty()) {
+                            Text(
+                                text = annotated,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // Duplicate string warning

@@ -1,6 +1,7 @@
 package com.notenotes.export
 
 import android.util.Log
+import com.notenotes.util.GuitarUtils
 
 /**
  * Sanitize legacy MusicXML for alphaTab compatibility.
@@ -191,7 +192,17 @@ object MusicXmlSanitizer {
         val alter   = Regex("""<alter>(-?\d+)</alter>""").find(original)?.groupValues?.get(1)
         val octave  = Regex("""<octave>(\d+)</octave>""").find(original)?.groupValues?.get(1)
         val voice   = Regex("""<voice>(\d+)</voice>""").find(original)?.groupValues?.get(1) ?: "1"
-        val str     = if (keepTech) Regex("""<string>(\d+)</string>""").find(original)?.groupValues?.get(1) else null
+        val str     = if (keepTech) {
+            Regex("""<string>(\d+)</string>""").find(original)?.groupValues?.get(1)?.let { raw ->
+                val r = raw.toIntOrNull() ?: return@let raw
+                val normalized = when {
+                    r in 1..GuitarUtils.STRINGS.size -> r
+                    r in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(r)
+                    else -> r.coerceIn(1, GuitarUtils.STRINGS.size)
+                }
+                normalized.toString()
+            }
+        } else null
         val fret    = if (keepTech) Regex("""<fret>(\d+)</fret>""").find(original)?.groupValues?.get(1) else null
 
         val sb = StringBuilder()

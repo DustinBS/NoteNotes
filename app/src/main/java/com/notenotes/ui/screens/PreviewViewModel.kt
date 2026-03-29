@@ -570,14 +570,30 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         // Create the new note with auto-duration placeholder (will be recalculated)
         val primaryEntry = editorNotes.minByOrNull { it.first }!!
         val primaryMidi = primaryEntry.first
-        val primaryString = primaryEntry.second.first
+        val primaryStringRaw = primaryEntry.second.first
         val primaryFret = primaryEntry.second.second
+        // Normalize provided string identifier to canonical human 1-based numbering
+        val primaryString = when {
+            primaryStringRaw in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> primaryStringRaw
+            primaryStringRaw in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(primaryStringRaw)
+            else -> primaryStringRaw.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
+        }
         // Create chord entries sorted by MIDI pitch (so chordPitches and chordStringFrets stay in sync)
         val chordEntries = if (editorNotes.size > 1) {
             editorNotes.filter { it.second != primaryEntry.second }.sortedBy { it.first }
         } else emptyList()
         val chordPitches = chordEntries.map { it.first }
-        val chordStringFrets = chordEntries.map { Pair(it.second.first, it.second.second) }
+        // Normalize chord string identifiers to canonical human numbering
+        val chordStringFrets = chordEntries.map { ce ->
+            val raw = ce.second.first
+            val fret = ce.second.second
+            val human = when {
+                raw in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> raw
+                raw in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(raw)
+                else -> raw.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
+            }
+            Pair(human, fret)
+        }
 
         val newNote = MusicalNote(
             pitches = listOf(primaryMidi) + chordPitches,
@@ -665,7 +681,13 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val currentNotes = _notesList.value.toMutableList()
         if (index !in currentNotes.indices) return
         val oldNote = currentNotes[index]
-        val newMidi = com.notenotes.util.GuitarUtils.toMidi(guitarString, guitarFret)
+        // Normalize supplied string identifier (may be 0-based index or 1-based human)
+        val human = when {
+            guitarString in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> guitarString
+            guitarString in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(guitarString)
+            else -> guitarString.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
+        }
+        val newMidi = com.notenotes.util.GuitarUtils.toMidi(human, guitarFret)
         
         // Preserve chord pitches if they exist, but update the primary
         val newPitches = oldNote.pitches.toMutableList()
@@ -674,8 +696,8 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         if (newPitches.isEmpty()) newPitches.add(newMidi)
         else newPitches[0] = newMidi
         
-        if (newTabs.isEmpty()) newTabs.add(Pair(guitarString, guitarFret))
-        else newTabs[0] = Pair(guitarString, guitarFret)
+        if (newTabs.isEmpty()) newTabs.add(Pair(human, guitarFret))
+        else newTabs[0] = Pair(human, guitarFret)
 
         currentNotes[index] = oldNote.copy(
             pitches = newPitches,
@@ -697,11 +719,27 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         if (fullPitches.isEmpty() || fullStringFrets.isEmpty()) return
 
         val primaryPitch = fullPitches.first()
-        val primaryTab = fullStringFrets.first()
+        val primaryTabRaw = fullStringFrets.first()
+        val primaryTab = Pair(
+            when {
+                primaryTabRaw.first in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> primaryTabRaw.first
+                primaryTabRaw.first in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(primaryTabRaw.first)
+                else -> primaryTabRaw.first.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
+            }, primaryTabRaw.second
+        )
 
         // Keep the rest of the notes, filtering out accidental duplicate exact strings
         // Sort the rest by pitch for standardized chord rendering
         val restPaired = fullPitches.zip(fullStringFrets).drop(1)
+            .map { pair ->
+                val raw = pair.second
+                val human = when {
+                    raw.first in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> raw.first
+                    raw.first in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(raw.first)
+                    else -> raw.first.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
+                }
+                Pair(pair.first, Pair(human, raw.second))
+            }
             .filter { it.second != primaryTab } // don't duplicate the primary note perfectly
             .distinctBy { it.second.first } // ensure one note per physical guitar string max
             .sortedBy { it.first } // sort by pitch 

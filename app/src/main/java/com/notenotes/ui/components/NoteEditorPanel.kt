@@ -37,7 +37,7 @@ import com.notenotes.utils.NoteTextUtils
 data class EditorNote(
     val stringIndex: Int,  // 0-based index into GuitarUtils.STRINGS
     val fret: Int,
-    val midiPitch: Int = GuitarUtils.toMidi(stringIndex, fret)
+    val midiPitch: Int = GuitarUtils.toMidi(GuitarUtils.indexToHuman(stringIndex), fret)
 )
 
 /**
@@ -69,7 +69,7 @@ fun NoteEditorPanel(
     isMoveMode: Boolean = false,
     onToggleMoveMode: (() -> Unit)? = null,
     onCopyFromNote: ((Int) -> Unit)? = null,
-    onPendingChangesChanged: ((Boolean, androidx.compose.ui.text.AnnotatedString?) -> Unit)? = null,
+    onPendingChangesChanged: ((Boolean, Map<Int, androidx.compose.ui.text.AnnotatedString>?) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val state = rememberGuitarChordEditState(selectedNote)
@@ -79,23 +79,73 @@ fun NoteEditorPanel(
     LaunchedEffect(hasSelectedNote, selectedNoteIndex, state) {
         androidx.compose.runtime.snapshotFlow {
             if (hasSelectedNote && selectedNoteIndex != null && state.hasPendingChanges && selectedNote != null) {
-                val originalText = NoteTextUtils.buildPitchFretAnnotated(selectedNote, isStrikethrough = true)
                 val newPitches = listOf(state.editedPrimaryMidi) + state.editableChordPitches
                 val newPositions = listOf(Pair(state.editedPrimaryString, state.editedPrimaryFret)) + state.editableChordPositions
-                val dummyNote = selectedNote.copy(pitches = newPitches, tabPositions = newPositions)
-                val newText = NoteTextUtils.buildPitchFretAnnotated(dummyNote)
-                
-                val combined = androidx.compose.ui.text.buildAnnotatedString {
-                    append(originalText)
-                    append(" -> ")
-                    append(newText)
+
+                // Map by guitar string index -> tabPosition for old and new chords
+                val oldMap = linkedMapOf<Int, Pair<Int, Int>>()
+                selectedNote.pitches.forEachIndexed { idx, pitch ->
+                    val rawPos = selectedNote.safeTabPositions.getOrNull(idx) ?: com.notenotes.util.GuitarUtils.fromMidi(pitch) ?: Pair(0, 0)
+                    val rawIdx = rawPos.first
+                    val normIdx = when {
+                        rawIdx in 0 until GuitarUtils.STRINGS.size -> rawIdx
+                        rawIdx in 1..GuitarUtils.STRINGS.size -> com.notenotes.util.GuitarUtils.humanToIndex(rawIdx) ?: 0
+                        else -> com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { com.notenotes.util.GuitarUtils.humanToIndex(it.first) ?: 0 } ?: 0
+                    }
+                    val pos = Pair(normIdx, rawPos.second)
+                    if (!oldMap.containsKey(normIdx)) {
+                        oldMap[normIdx] = pos
+                    }
                 }
-                true to combined
+
+                val newMap = linkedMapOf<Int, Pair<Int, Int>>()
+                newPitches.forEachIndexed { idx, pitch ->
+                    val rawPos = newPositions.getOrNull(idx) ?: com.notenotes.util.GuitarUtils.fromMidi(pitch) ?: Pair(0, 0)
+                    val rawIdx = rawPos.first
+                    val normIdx = when {
+                        rawIdx in 0 until GuitarUtils.STRINGS.size -> rawIdx
+                        rawIdx in 1..GuitarUtils.STRINGS.size -> com.notenotes.util.GuitarUtils.humanToIndex(rawIdx) ?: 0
+                        else -> com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { com.notenotes.util.GuitarUtils.humanToIndex(it.first) ?: 0 } ?: 0
+                    }
+                    val pos = Pair(normIdx, rawPos.second)
+                    if (!newMap.containsKey(normIdx)) {
+                        newMap[normIdx] = pos
+                    }
+                }
+
+                val unionStrings = (oldMap.keys + newMap.keys).toSortedSet()
+                val map = linkedMapOf<Int, androidx.compose.ui.text.AnnotatedString>()
+
+                unionStrings.forEach { strIdx ->
+                    val oldPos = oldMap[strIdx]
+                    val newPos = newMap[strIdx]
+
+                        if (oldPos != null && newPos != null && oldPos == newPos) {
+                        map[strIdx] = NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, oldPos.second, isStrikethrough = false)
+                    } else {
+                        val oldAnnotated = if (oldPos != null) {
+                            NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, oldPos.second, isStrikethrough = true, isPendingSmall = true)
+                        } else androidx.compose.ui.text.AnnotatedString("")
+
+                        val newAnnotated = if (newPos != null) {
+                            NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, newPos.second, isStrikethrough = false)
+                        } else androidx.compose.ui.text.AnnotatedString("")
+
+                        val combined = androidx.compose.ui.text.buildAnnotatedString {
+                            if (oldAnnotated.text.isNotEmpty()) append(oldAnnotated)
+                            append(" ")
+                            if (newAnnotated.text.isNotEmpty()) append(newAnnotated)
+                        }
+                        map[strIdx] = combined
+                    }
+                }
+
+                true to map
             } else {
                 false to null
             }
-        }.collect { (hasPending, pendingText) ->
-            onPendingChangesChanged?.invoke(hasPending, pendingText)
+        }.collect { (hasPending, pendingMap) ->
+            onPendingChangesChanged?.invoke(hasPending, pendingMap)
         }
     }
 
@@ -233,7 +283,7 @@ fun NoteEditorPanel(
                 } else {
                     Button(
                         onClick = {
-                            val targetMidi = GuitarUtils.toMidi(state.selectedStringIndex, state.selectedFret)
+                            val targetMidi = GuitarUtils.toMidi(GuitarUtils.indexToHuman(state.selectedStringIndex), state.selectedFret)
                             val pairs = listOf(Pair(targetMidi, Pair(state.selectedStringIndex, state.selectedFret)))
                             onAddNote(pairs)
                         },

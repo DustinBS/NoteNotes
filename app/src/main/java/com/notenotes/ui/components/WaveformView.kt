@@ -27,10 +27,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.notenotes.model.MusicalNote
 import com.notenotes.util.PitchUtils
 import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
@@ -89,13 +92,22 @@ data class WaveformData(
  * Represents a note overlay item positioned on the waveform timeline.
  */
 data class NoteOverlayItem(
-    val label: androidx.compose.ui.text.AnnotatedString,          // e.g., "C4", "Am"
+    val labelMap: Map<Int, androidx.compose.ui.text.AnnotatedString>, // stringIndex -> label (single-line per string)
     val startFraction: Float,   // 0.0–1.0 position along GLOBAL timeline
     val endFraction: Float,
     val pitches: List<Int>,
     val noteIndex: Int,
     val hasTab: Boolean = false,
     val tabLabel: String? = null // e.g., "S1 F3" for string 1, fret 3
+)
+
+// Internal helper for deferring caption draws so we can render them on top.
+private data class DeferredLabel(
+    val annotated: androidx.compose.ui.text.AnnotatedString,
+    val labelX: Float,
+    val topY: Float,
+    val effectiveTextStyle: TextStyle,
+    val stringIndex: Int
 )
 
 /**
@@ -123,8 +135,20 @@ fun WaveformView(
     windowSizeSec: Float = 5f,
     isMoveMode: Boolean = false,
     onMoveSelectedNote: ((Int, Float) -> Unit)? = null,
-    pendingSelectedNoteText: androidx.compose.ui.text.AnnotatedString? = null
+    pendingSelectedNoteLines: Map<Int, androidx.compose.ui.text.AnnotatedString>? = null
 ) {
+    // Caption tuning parameters (tweak these values to change outline thickness)
+    // - `CAPTION_STROKE_FACTOR`: fraction of font size used for outline stroke width.
+    // - `CAPTION_STROKE_MIN_PX`: minimum stroke width in pixels.
+    // To make outlines thicker, increase CAPTION_STROKE_FACTOR (e.g. 0.15f).
+    val CAPTION_STROKE_FACTOR = 0.13f
+    val CAPTION_STROKE_MIN_PX = 0.9f
+    // Superscript layout tuning (used for rendering frets/ornaments)
+    val SUPERSCRIPT_SHIFT_FACTOR = 0.36f
+    val SUPERSCRIPT_FONT_FACTOR = 0.70f
+    // Row spacing factor: slightly reduce inter-row spacing for chord captions
+    val ROW_SPACING_FACTOR = 0.92f
+
     val isDummy = waveformData == null || waveformData.durationSeconds <= 0f || waveformData.peaks.isEmpty()
     
     val renderWaveformData = remember(isDummy, waveformData, windowSizeSec) {
@@ -153,17 +177,19 @@ fun WaveformView(
         computeNoteOverlays(notes, tempoBpm, durationMs, durationSec)
     }
 
+    // Use fixed guitar string grid (0 = low E / string 6) so rows align across chords
+    val maxStrings = com.notenotes.util.GuitarUtils.STRINGS.size
+
     val textMeasurer = rememberTextMeasurer()
     val waveColor = if (isDummy) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f) else MaterialTheme.colorScheme.primary
     val waveBgColor = if (isDummy) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-    val playheadColor = com.notenotes.ui.theme.PlayheadCursorColor
+    val playheadColor = MaterialTheme.colorScheme.error
     val noteBoxColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.3f)
     val noteBorderColor = MaterialTheme.colorScheme.tertiary
     val selectedNoteColor = MaterialTheme.colorScheme.error.copy(alpha = 0.4f)
     val selectedNoteBorder = MaterialTheme.colorScheme.error
-    val editCursorColor = com.notenotes.ui.theme.EditCursorColor
+    val editCursorColor = androidx.compose.ui.graphics.Color.White
     val noteTextColor = MaterialTheme.colorScheme.onTertiaryContainer
-    val tabTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
     val bgColor = MaterialTheme.colorScheme.surfaceVariant
     val timeTextStyle = TextStyle(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -171,12 +197,9 @@ fun WaveformView(
     )
     val noteTextStyle = TextStyle(
         color = noteTextColor,
-        fontSize = 11.sp
+        fontSize = 12.sp
     )
-    val tabTextStyle = TextStyle(
-        color = tabTextColor,
-        fontSize = 9.sp
-    )
+    
 
     val context = LocalContext.current
 
@@ -198,8 +221,10 @@ fun WaveformView(
         if (seekFraction != null) onSeek(seekFraction)
     }
 
+    val effectiveModifier = modifier
+
     Canvas(
-        modifier = modifier
+        modifier = effectiveModifier
             .fillMaxSize()
             .background(bgColor)
             .pointerInput(Unit) {
@@ -313,15 +338,28 @@ fun WaveformView(
     ) {
         val w = size.width
         val h = size.height
-        val waveTop = 30f
-        val waveBottom = h - 40f  // more room for note labels + tab info
-        val waveHeight = waveBottom - waveTop
-        val waveMid = waveTop + waveHeight / 2f
+        // Reserve space at the top for the time/db axis so captions don't overlap it. The bottom
+        // edge may be flush with the window per user request.
+        // Measure text heights using Compose text measurer so we can reserve
+        // sufficient top padding to avoid clipping the topmost string label.
         val maxAmp = renderWaveformData.maxAmplitude
         val maxDbValue = if (maxAmp > 1f) 20f * kotlin.math.log10(maxAmp / 32768f) else -60f
         val topDbLabel = if (maxDbValue <= -60f) "-∞ dB" else String.format("%.1f dB", maxDbValue)
         val midDbLabel = "-∞ dB"
-        val bottomDbLabel = topDbLabel
+
+        val timeSample = "0s"
+        val timeLabelHeight = textMeasurer.measure(timeSample, timeTextStyle).size.height.toFloat()
+        val dbLabelHeight = textMeasurer.measure(topDbLabel, timeTextStyle).size.height.toFloat()
+
+        
+
+        // Keep top padding minimal so note-block overlays sit immediately under the axis.
+        // Detailed per-overlay margins will ensure labels don't overlap the axis.
+        val topPadding = kotlin.math.max(dbLabelHeight, timeLabelHeight) + 2f
+        val waveTop = topPadding
+        val waveBottom = h
+        val waveHeight = waveBottom - waveTop
+        val waveMid = waveTop + waveHeight / 2f
 
         val moveModeBorderEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
 
@@ -330,6 +368,12 @@ fun WaveformView(
             windowStartFraction * durationSec, windowEndFraction * durationSec, windowSizeSec)
 
         // Draw note overlays (only those visible in window)
+
+        // We'll collect caption draw requests and render them at the end so
+        // captions appear on top of all other canvas elements. This also lets
+        // us draw optional debug bounding boxes after everything is rendered.
+        val deferredLabels = mutableListOf<DeferredLabel>()
+
         for (overlay in noteOverlays) {
             // Skip notes completely outside window
             if (overlay.endFraction < windowStartFraction || overlay.startFraction > windowEndFraction) continue
@@ -360,21 +404,59 @@ fun WaveformView(
                 }
             )
 
-            // Note label at bottom
-            val displayLabel = if (isSelected && pendingSelectedNoteText != null) pendingSelectedNoteText else overlay.label
-            val labelResult = textMeasurer.measure(displayLabel, noteTextStyle)
-            val labelX = x1 + 2f
-            val labelY = waveBottom + 2f
-            if (labelX + labelResult.size.width < w && labelX >= 0f) {
-                drawText(labelResult, topLeft = Offset(labelX, labelY))
+            // Draw per-string rows using full note block height; compute spacing so
+            // all six strings fit inside the note block with safe margins for
+            // stroke outlines and superscripts.
+            val labelX = x1 + 6f
+
+            // Collect annotated strings for this overlay, preferring pending overrides for selected note.
+            val annotatedByString = (0 until maxStrings).associateWith { si ->
+                val pending = if (isSelected) pendingSelectedNoteLines?.get(si) else null
+                pending ?: overlay.labelMap[si]
             }
 
-            // Tab label below note name if exists
-            if (overlay.tabLabel != null) {
-                val tabResult = textMeasurer.measure(overlay.tabLabel, tabTextStyle)
-                val tabY = labelY + labelResult.size.height + 1f
-                if (labelX + tabResult.size.width < w && labelX >= 0f) {
-                    drawText(tabResult, topLeft = Offset(labelX, tabY))
+            // Measure per-string heights using the default text style (12sp)
+            val measuredHeights = annotatedByString.values.mapNotNull { a ->
+                if (a == null || a.text.isEmpty()) null else textMeasurer.measure(a, noteTextStyle).size.height.toFloat()
+            }
+            val overlayLabelMaxHeight = measuredHeights.maxOrNull() ?: textMeasurer.measure("A", noteTextStyle).size.height.toFloat()
+
+            // Compute safe vertical margins so labels do not clip the waveform edges.
+            val defaultFontPx = noteTextStyle.fontSize.toPx()
+            val strokeWidthPx = (defaultFontPx * CAPTION_STROKE_FACTOR).coerceAtLeast(CAPTION_STROKE_MIN_PX)
+            val topMargin = (overlayLabelMaxHeight / 2f) + strokeWidthPx / 2f
+            // Keep bottom margin minimal so the bottommost string can be drawn
+            // flush with the overlay bottom (removes trailing empty line).
+            val bottomMargin = 0f
+
+            val usableHeight = (waveHeight - topMargin - bottomMargin).coerceAtLeast(4f)
+            val rawStep = if (maxStrings > 1) usableHeight / (maxStrings - 1) else usableHeight
+            val step = rawStep * ROW_SPACING_FACTOR
+
+            // If labels are taller than the per-string step, scale down the text
+            val effectiveTextStyle = if (overlayLabelMaxHeight > 0f && overlayLabelMaxHeight > step * 0.9f) {
+                val baseSize = 12f
+                val scale = (step * 0.85f) / overlayLabelMaxHeight
+                noteTextStyle.copy(fontSize = (baseSize * scale).sp)
+            } else noteTextStyle
+
+            // Fixed six-row grid: place each string's label at its canonical row
+            // (single notes behave like chords with one active string).
+            for (stringIndex in 0 until maxStrings) {
+                val annotated = annotatedByString[stringIndex]
+                if (annotated != null && annotated.text.isNotEmpty()) {
+                    val measured = textMeasurer.measure(annotated, effectiveTextStyle)
+                    val centerY = waveTop + topMargin + (maxStrings - 1 - stringIndex).toFloat() * step
+                    val topY = centerY - measured.size.height / 2f
+                    val drawTopY = if (stringIndex == 0) {
+                        // bottom row: flush with overlay bottom
+                        (waveBottom - measured.size.height).coerceAtLeast(waveTop)
+                    } else topY.coerceAtLeast(waveTop)
+
+                    val fitsVertically = drawTopY + measured.size.height <= waveBottom + 1f
+                    if (fitsVertically && labelX + measured.size.width.toFloat() < w && labelX >= 0f) {
+                        deferredLabels.add(DeferredLabel(annotated, labelX, drawTopY, effectiveTextStyle, stringIndex))
+                    }
                 }
             }
         }
@@ -433,11 +515,8 @@ fun WaveformView(
             end = Offset(w, waveBottom),
             strokeWidth = 1f
         )
-        drawContext.canvas.nativeCanvas.drawText(topDbLabel, 5f, waveTop + 25f, android.graphics.Paint().apply {
-            color = android.graphics.Color.LTGRAY
-            textSize = 24f
-        })
-        drawContext.canvas.nativeCanvas.drawText(bottomDbLabel, 5f, waveBottom - 5f, android.graphics.Paint().apply {
+        // Draw dB label near the top padding area so it does not collide with per-string captions.
+        drawContext.canvas.nativeCanvas.drawText(topDbLabel, 5f, (waveTop - 6f).coerceAtLeast(18f), android.graphics.Paint().apply {
             color = android.graphics.Color.LTGRAY
             textSize = 24f
         })
@@ -533,6 +612,112 @@ fun WaveformView(
             rightTri.close()
             drawPath(rightTri, playheadColor, style = Fill)
         }
+
+        // Render deferred caption labels now so they appear on top of other canvas elements.
+        if (deferredLabels.isNotEmpty()) {
+            // Use shared superscript constants declared above
+
+            // Helper: convert Compose Color to Android ARGB
+            fun colorToArgb(c: androidx.compose.ui.graphics.Color): Int = android.graphics.Color.argb(
+                (c.alpha * 255f).toInt().coerceIn(0, 255),
+                (c.red * 255f).toInt().coerceIn(0, 255),
+                (c.green * 255f).toInt().coerceIn(0, 255),
+                (c.blue * 255f).toInt().coerceIn(0, 255)
+            )
+
+            for (lbl in deferredLabels) {
+                val full = lbl.annotated
+                var drawX = lbl.labelX
+                val topY = lbl.topY
+                val native = drawContext.canvas.nativeCanvas
+
+                // Compute a darker variant of the string color
+                val base = com.notenotes.util.GuitarUtils.STRINGS.getOrNull(lbl.stringIndex)?.let { androidx.compose.ui.graphics.Color(it.colorArgb) } ?: androidx.compose.ui.graphics.Color.Black
+                val factor = 0.55f
+                val darkerForString = androidx.compose.ui.graphics.Color(
+                    red = (base.red * factor).coerceIn(0f, 1f),
+                    green = (base.green * factor).coerceIn(0f, 1f),
+                    blue = (base.blue * factor).coerceIn(0f, 1f),
+                    alpha = base.alpha
+                )
+
+                fun drawRun(text: String, runPx: Float, fillCol: androidx.compose.ui.graphics.Color, strokeCol: androidx.compose.ui.graphics.Color, strike: Boolean, baselineShiftPx: Float = 0f) {
+                    if (text.isEmpty()) return
+                    val strokePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        style = android.graphics.Paint.Style.STROKE
+                        strokeWidth = (runPx * CAPTION_STROKE_FACTOR).coerceAtLeast(CAPTION_STROKE_MIN_PX)
+                        color = colorToArgb(strokeCol)
+                        textSize = runPx
+                        isAntiAlias = true
+                        isStrikeThruText = false
+                    }
+
+                    val fillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        style = android.graphics.Paint.Style.FILL
+                        color = colorToArgb(fillCol)
+                        textSize = runPx
+                        isAntiAlias = true
+                        isStrikeThruText = false
+                    }
+
+                    val fm = fillPaint.fontMetrics
+                    val baseline = topY - fm.ascent - baselineShiftPx
+
+                    val startX = drawX
+                    native.drawText(text, startX, baseline, strokePaint)
+                    native.drawText(text, startX, baseline, fillPaint)
+
+                    val textWidth = fillPaint.measureText(text)
+                    if (strike) {
+                        val strikePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                            style = android.graphics.Paint.Style.STROKE
+                            color = colorToArgb(androidx.compose.ui.graphics.Color.Black)
+                            strokeWidth = (runPx * 0.09f).coerceAtLeast(1f)
+                            isAntiAlias = true
+                        }
+                        val strikeY = baseline + (fillPaint.fontMetrics.ascent + fillPaint.fontMetrics.descent) / 2f
+                        native.drawLine(startX, strikeY, startX + textWidth, strikeY, strikePaint)
+                    }
+
+                    drawX += textWidth
+                }
+
+                if (full.spanStyles.isEmpty()) {
+                    val runPx = lbl.effectiveTextStyle.fontSize.toPx()
+                    drawRun(full.text, runPx, noteTextColor, darkerForString, strike = false)
+                } else {
+                    var last = 0
+                    val spans = full.spanStyles.sortedBy { it.start }
+                    for (range in spans) {
+                        if (range.start > last) {
+                            val plain = full.text.substring(last, range.start)
+                            drawRun(plain, lbl.effectiveTextStyle.fontSize.toPx(), noteTextColor, darkerForString, strike = false)
+                        }
+                        val chunk = full.text.substring(range.start, range.end)
+                        val spanStyle = range.item
+                        val isStrike = spanStyle.textDecoration == androidx.compose.ui.text.style.TextDecoration.LineThrough
+                        val strokeForRange = if (isStrike) androidx.compose.ui.graphics.Color.Black else darkerForString
+                        val fillForRange = if (spanStyle.color != androidx.compose.ui.graphics.Color.Unspecified) spanStyle.color else noteTextColor
+                        val isSuperscript = spanStyle.baselineShift == BaselineShift.Superscript
+                        val runPx = if (spanStyle.fontSize != androidx.compose.ui.unit.TextUnit.Unspecified) {
+                            spanStyle.fontSize.toPx()
+                        } else if (isSuperscript) {
+                            lbl.effectiveTextStyle.fontSize.toPx() * SUPERSCRIPT_FONT_FACTOR
+                        } else {
+                            lbl.effectiveTextStyle.fontSize.toPx()
+                        }
+                        val baselineShiftPx = if (isSuperscript) (runPx * SUPERSCRIPT_SHIFT_FACTOR) else 0f
+                        drawRun(chunk, runPx, fillForRange, strokeForRange, strike = isStrike, baselineShiftPx = baselineShiftPx)
+                        last = range.end
+                    }
+                    if (last < full.text.length) {
+                        val tail = full.text.substring(last)
+                        drawRun(tail, lbl.effectiveTextStyle.fontSize.toPx(), noteTextColor, darkerForString, strike = false)
+                    }
+                }
+
+            }
+        }
     }
 }
 
@@ -607,7 +792,7 @@ private fun DrawScope.drawWindowedWaveform(
  * Convert MusicalNotes to overlay positions based on tempo and duration.
  * Notes with timePositionMs use exact positioning; others use cumulative timing.
  */
-private fun computeNoteOverlays(
+internal fun computeNoteOverlays(
     notes: List<MusicalNote>,
     tempoBpm: Int,
     durationMs: Int,
@@ -640,10 +825,44 @@ private fun computeNoteOverlays(
         val startFraction = (noteStartSec / paddedDurationSec).coerceIn(0f, 1f)
         val endFraction = ((noteStartSec + noteDurationSec) / paddedDurationSec).coerceIn(0f, 1f)
 
-        val label = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotated(note) 
+        // Build per-string annotated labels and store in a map keyed by guitar string index (0..5)
+        val pairs = note.pitches.mapIndexed { i, p ->
+            // Use the index-aligned view; fallback to GuitarUtils.fromMidi (human) converted to index
+            val tpIndex = note.safeTabPositionsAsIndex.getOrNull(i) ?: run {
+                val fm = com.notenotes.util.GuitarUtils.fromMidi(p)
+                if (fm != null) {
+                    val human = fm.first
+                    val idx = com.notenotes.util.GuitarUtils.humanToIndex(human) ?: 0
+                    Pair(idx, fm.second)
+                } else Pair(0, 0)
+            }
+            Triple(p, tpIndex.first, tpIndex.second)
+        }
+
+        val labelMapMutable = mutableMapOf<Int, androidx.compose.ui.text.AnnotatedString>()
+        for ((_, strIdx, fret) in pairs) {
+            // Build per-string annotated label using a central helper to avoid
+            // creating temporary MusicalNote instances at call sites.
+            val annotated = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, fret)
+            if (labelMapMutable.containsKey(strIdx)) {
+                val existing = labelMapMutable[strIdx]!!
+                val combined = androidx.compose.ui.text.buildAnnotatedString {
+                    append(existing)
+                    append("/")
+                    append(annotated)
+                }
+                labelMapMutable[strIdx] = combined
+            } else {
+                labelMapMutable[strIdx] = annotated
+            }
+        }
+        // Do not auto-fill missing strings with open-string labels here.
+        // The WaveformView rendering will display only the strings present
+        // in `labelMap` for each overlay (single notes are treated as n=1).
+        val labelMap = labelMapMutable.toMap()
 
         overlays.add(NoteOverlayItem(
-            label = label,
+            labelMap = labelMap,
             startFraction = startFraction,
             endFraction = endFraction,
             pitches = note.pitches,

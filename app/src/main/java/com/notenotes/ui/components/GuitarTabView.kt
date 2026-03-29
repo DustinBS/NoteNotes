@@ -107,9 +107,11 @@ fun GuitarTabView(
             val timeSec = if (timeMs != null) timeMs / 1000f else cumulativeSec
 
             if (note.hasTab) {
-                note.tabPositions.forEach { (guitarString, guitarFret) ->
-                    val displayLine = 5 - guitarString // convert to display order
-                    result.add(TabNote(timeSec, guitarString, guitarFret,
+                // `tabPositions` are canonical human 1-based numbers; use the index-aligned view
+                // so UI consumers receive 0-based string indices (0 = Low E).
+                note.safeTabPositionsAsIndex.forEach { (guitarStringIdx, guitarFret) ->
+                    val displayLine = 5 - guitarStringIdx // convert to display order
+                    result.add(TabNote(timeSec, guitarStringIdx, guitarFret,
                         guitarFret.toString(), note.isManual, displayLine.coerceIn(0, 5)))
                 }
             } else {

@@ -164,15 +164,24 @@ internal fun computeStatsForIdeas(ideas: List<MelodyIdea>): StatsUiState {
             val chordSize = note.pitches.size
             chordSizeCounts[chordSize] = (chordSizeCounts[chordSize] ?: 0) + 1
 
-            val primaryPos = note.safeTabPositions.firstOrNull() ?: GuitarUtils.fromMidi(note.pitches.first())
-            addStringUsage(primaryPos?.first, primaryPos?.second, durationSec)
+            // Prefer the index-aligned view exposed by MusicalNote.safeTabPositionsAsIndex.
+            // If absent, fall back to fromMidi and convert the returned human string
+            // number to a 0-based index.
+            val primaryIndexed = note.safeTabPositionsAsIndex.firstOrNull() ?: GuitarUtils.fromMidi(note.pitches.first())?.let { sf ->
+                val idx = sf.first.let { com.notenotes.util.GuitarUtils.humanToIndex(it) }
+                if (idx != null) Pair(idx, sf.second) else null
+            }
+            addStringUsage(primaryIndexed?.first, primaryIndexed?.second, durationSec)
 
             if (note.isChord) {
                 note.pitches.indices.forEach { chordIndex ->
                     if (chordIndex == 0) return@forEach // skip primary pitch
                     val pitch = note.pitches[chordIndex]
-                    val stringFret = note.safeTabPositions.getOrNull(chordIndex) ?: GuitarUtils.fromMidi(pitch)
-                    addStringUsage(stringFret?.first, stringFret?.second, durationSec)
+                    val chordIndexed = note.safeTabPositionsAsIndex.getOrNull(chordIndex) ?: GuitarUtils.fromMidi(pitch)?.let { sf ->
+                        val idx = sf.first.let { com.notenotes.util.GuitarUtils.humanToIndex(it) }
+                        if (idx != null) Pair(idx, sf.second) else null
+                    }
+                    addStringUsage(chordIndexed?.first, chordIndexed?.second, durationSec)
                 }
             }
         }
