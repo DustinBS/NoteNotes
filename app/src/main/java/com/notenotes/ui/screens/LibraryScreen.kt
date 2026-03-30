@@ -684,6 +684,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 // ──────────────────────────── Screen ────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun LibraryScreen(
     onNavigateToPreview: (Long) -> Unit,
@@ -1235,7 +1236,6 @@ fun LibraryScreen(
                                     edgeLabel = compactGroupEdgeLabel(
                                         idea.groupName?.takeIf { it.isNotBlank() } ?: "Ungrouped"
                                     ),
-                                    availableGroups = availableGroups,
                                     onClick = {
                                         if (selectedIds.isNotEmpty()) {
                                             viewModel.toggleSelection(idea.id)
@@ -1281,7 +1281,6 @@ fun LibraryScreen(
                                             isSelected = idea.id in selectedIds,
                                             isSelecting = selectedIds.isNotEmpty(),
                                             accentColor = gColor,
-                                            availableGroups = availableGroups,
                                             onClick = {
                                                 if (selectedIds.isNotEmpty()) {
                                                     viewModel.toggleSelection(idea.id)
@@ -1321,7 +1320,6 @@ fun LibraryScreen(
                                     isSelected = idea.id in selectedIds,
                                     isSelecting = selectedIds.isNotEmpty(),
                                     accentColor = null,
-                                    availableGroups = availableGroups,
                                     onClick = {
                                         if (selectedIds.isNotEmpty()) {
                                             viewModel.toggleSelection(idea.id)
@@ -1482,16 +1480,15 @@ private fun IdeaCard(
     isSelected: Boolean,
     isSelecting: Boolean,
     accentColor: Color?,
+    modifier: Modifier = Modifier,
     edgeLabel: String? = null,
-    availableGroups: Map<String, String>,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onRename: (String) -> Unit,
     onDuplicate: () -> Unit,
     onEditFiles: () -> Unit,
     onRemoveFromGroup: (() -> Unit)?,
-    onMoveToGroup: () -> Unit,
-    modifier: Modifier = Modifier
+    onMoveToGroup: () -> Unit
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showItemMenu by remember { mutableStateOf(false) }

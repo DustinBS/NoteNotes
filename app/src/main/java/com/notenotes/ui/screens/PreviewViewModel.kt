@@ -1,5 +1,4 @@
 ﻿package com.notenotes.ui.screens
-
 import android.app.Application
 import android.content.Context
 import android.content.Intent
@@ -7,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.notenotes.audio.AudioPlayer
+import com.notenotes.audio.PlaybackUtils
 import com.notenotes.audio.AudioDecoder
 import com.notenotes.audio.WavReader
 import com.notenotes.audio.WavWriter
@@ -42,12 +42,12 @@ private const val TAG = "NNPreview"
 
 class PreviewViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val context = application.applicationContext
+    private val context: Context get() = getApplication<Application>().applicationContext
     private val dao = AppDatabase.getDatabase(context).melodyDao()
     private val audioPlayer = AudioPlayer()
     private val midiWriter = MidiWriter()
     private val musicXmlGenerator = MusicXmlGenerator()
-    private val fileExporter = FileExporter(context, midiWriter, musicXmlGenerator)
+    private val fileExporter by lazy { FileExporter(context, midiWriter, musicXmlGenerator) }
     private val gson = Gson()
 
     private val _idea = MutableStateFlow<MelodyIdea?>(null)
@@ -264,8 +264,10 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
                         _waveformData.value = null
                     }
                 }
-                // Prepare the audio player so UI can play immediately
-                try { audioPlayer.load(file) } catch (_: Exception) {}
+                // Pause any other players before showing this preview. Do NOT auto-load
+                // the MediaPlayer here — loading can trigger device-specific races that
+                // accidentally start playback. Load/play should only occur on explicit user action.
+                PlaybackUtils.pauseOthers(audioPlayer)
             } catch (e: Exception) {
                 Log.e(TAG, "loadWaveformData: Error", e)
             }
@@ -573,26 +575,17 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val primaryStringRaw = primaryEntry.second.first
         val primaryFret = primaryEntry.second.second
         // Normalize provided string identifier to canonical human 1-based numbering.
-        // Prefer treating values as 0-based indices when they fall in that range (UI/editor callers pass indices).
-        val primaryString = when {
-            primaryStringRaw in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(primaryStringRaw)
-            primaryStringRaw in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> primaryStringRaw
-            else -> primaryStringRaw.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
-        }
+        val primaryString = primaryStringRaw.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
         // Create chord entries sorted by MIDI pitch (so chordPitches and chordStringFrets stay in sync)
         val chordEntries = if (editorNotes.size > 1) {
             editorNotes.filter { it.second != primaryEntry.second }.sortedBy { it.first }
         } else emptyList()
         val chordPitches = chordEntries.map { it.first }
         // Normalize chord string identifiers to canonical human numbering
-            val chordStringFrets = chordEntries.map { ce ->
+        val chordStringFrets = chordEntries.map { ce ->
             val raw = ce.second.first
             val fret = ce.second.second
-            val human = when {
-                raw in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(raw)
-                raw in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> raw
-                else -> raw.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
-            }
+            val human = raw.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
             Pair(human, fret)
         }
 
@@ -682,18 +675,13 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         val currentNotes = _notesList.value.toMutableList()
         if (index !in currentNotes.indices) return
         val oldNote = currentNotes[index]
-        // Normalize supplied string identifier (may be 0-based index or 1-based human).
-        // Prefer index-first normalization for values coming from UI/editor state.
-        val human = when {
-            guitarString in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(guitarString)
-            guitarString in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> guitarString
-            else -> guitarString.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
-        }
-        val newMidi = com.notenotes.util.GuitarUtils.toMidi(human, guitarFret)
+        // Treat supplied string identifier as human 1-based (1..N) and clamp it.
+        val human = guitarString.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
+        val newMidi = com.notenotes.util.GuitarUtils.toMidiHuman(human, guitarFret)
         
         // Preserve chord pitches if they exist, but update the primary
         val newPitches = oldNote.pitches.toMutableList()
-        val newTabs = oldNote.safeTabPositions.toMutableList()
+        val newTabs = oldNote.safeTabPositionsAsHuman.toMutableList()
         
         if (newPitches.isEmpty()) newPitches.add(newMidi)
         else newPitches[0] = newMidi
@@ -722,24 +710,14 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
 
         val primaryPitch = fullPitches.first()
         val primaryTabRaw = fullStringFrets.first()
-        val primaryTab = Pair(
-            when {
-                primaryTabRaw.first in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(primaryTabRaw.first)
-                primaryTabRaw.first in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> primaryTabRaw.first
-                else -> primaryTabRaw.first.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
-            }, primaryTabRaw.second
-        )
+        val primaryTab = Pair(primaryTabRaw.first.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size), primaryTabRaw.second)
 
         // Keep the rest of the notes, filtering out accidental duplicate exact strings
         // Sort the rest by pitch for standardized chord rendering
         val restPaired = fullPitches.zip(fullStringFrets).drop(1)
             .map { pair ->
                 val raw = pair.second
-                val human = when {
-                    raw.first in com.notenotes.util.GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(raw.first)
-                    raw.first in 1..com.notenotes.util.GuitarUtils.STRINGS.size -> raw.first
-                    else -> raw.first.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
-                }
+                val human = raw.first.coerceIn(1, com.notenotes.util.GuitarUtils.STRINGS.size)
                 Pair(pair.first, Pair(human, raw.second))
             }
             .filter { it.second != primaryTab } // don't duplicate the primary note perfectly
@@ -768,7 +746,7 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
 
         currentNotes[targetIndex] = target.copy(
             pitches = source.pitches,
-            tabPositions = source.safeTabPositions,
+            tabPositions = source.safeTabPositionsAsHuman,
             chordName = source.chordName,
             isManual = true
         )
@@ -1533,7 +1511,11 @@ class PreviewViewModel(application: Application) : AndroidViewModel(application)
         return detector.detectTimeSignature(onsetsSec, null, currentBpm.toDouble())
     }
 
-    
+    override fun onCleared() {
+        super.onCleared()
+        try { audioPlayer.release() } catch (_: Exception) {}
+    }
+
 }
 
 

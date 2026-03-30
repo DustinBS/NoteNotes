@@ -29,20 +29,18 @@ class WaveformEditorE2ETest {
         assertEquals(1, overlays.size)
         val labelMap = overlays[0].labelMap
 
-        // Expect internal indices 5 (high E) and 4 (B)
-        val highEIdx = GuitarUtils.humanToIndex(1)!!
-        val bIdx = GuitarUtils.humanToIndex(2)!!
+        // Expect human keys 1 (high E) and 2 (B)
+        val highHuman = 1
+        val bHuman = 2
 
-        println("overlay keys: ${labelMap.keys}")
-        assertTrue("Expected high E index present", labelMap.containsKey(highEIdx))
-        assertTrue("Expected B index present", labelMap.containsKey(bIdx))
+        
+        assertTrue("Expected high E key present", labelMap.containsKey(highHuman))
+        assertTrue("Expected B key present", labelMap.containsKey(bHuman))
 
         // Verify annotated text contains expected note names/frets and color spans
-        val highAnnotated = labelMap[highEIdx]!!
-        val bAnnotated = labelMap[bIdx]!!
-
-        println("highAnnotated.text=${highAnnotated.text}")
-        println("bAnnotated.text=${bAnnotated.text}")
+        val highAnnotated = labelMap[highHuman]!!
+        val bAnnotated = labelMap[bHuman]!!
+        
 
         assertTrue(highAnnotated.text.contains("E4"))
         assertTrue(bAnnotated.text.contains("B3"))
@@ -51,13 +49,13 @@ class WaveformEditorE2ETest {
 
         // Inspect first color span if present (buildPitchFretAnnotatedFromPosition applies a SpanStyle)
         val highSpanColor = highAnnotated.spanStyles.firstOrNull { it.item.color != Color.Unspecified }?.item?.color ?: Color.Unspecified
-        val expectedHigh = ColorUtils.lightenColor(Color(GuitarUtils.STRINGS[highEIdx].colorArgb))
+        val expectedHigh = ColorUtils.lightenColor(Color(com.notenotes.util.GuitarUtils.stringForHuman(highHuman).colorArgb))
         assertEquals(expectedHigh.red, highSpanColor.red, 0.0001f)
         assertEquals(expectedHigh.green, highSpanColor.green, 0.0001f)
         assertEquals(expectedHigh.blue, highSpanColor.blue, 0.0001f)
 
         val bSpanColor = bAnnotated.spanStyles.firstOrNull { it.item.color != Color.Unspecified }?.item?.color ?: Color.Unspecified
-        val expectedB = ColorUtils.lightenColor(Color(GuitarUtils.STRINGS[bIdx].colorArgb))
+        val expectedB = ColorUtils.lightenColor(Color(com.notenotes.util.GuitarUtils.stringForHuman(bHuman).colorArgb))
         assertEquals(expectedB.red, bSpanColor.red, 0.0001f)
         assertEquals(expectedB.green, bSpanColor.green, 0.0001f)
         assertEquals(expectedB.blue, bSpanColor.blue, 0.0001f)
@@ -81,11 +79,17 @@ class WaveformEditorE2ETest {
         // Reuse the same mapping logic as NoteEditorPanel to build pending lines
         val oldMap = linkedMapOf<Int, Pair<Int, Int>>()
         selectedNote.pitches.forEachIndexed { idx, pitch ->
-            val rawPosIndex = selectedNote.safeTabPositionsAsIndex.getOrNull(idx)
-                ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { Pair(com.notenotes.util.GuitarUtils.rawToIndex(it.first) ?: 0, it.second) }
-                ?: Pair(0, 0)
-            val normIdx = rawPosIndex.first
-            if (!oldMap.containsKey(normIdx)) oldMap[normIdx] = rawPosIndex
+            // Use canonical human view and normalize to human 1-based key
+            val rawPosHuman = selectedNote.safeTabPositionsAsHuman.getOrNull(idx)
+                ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)
+                ?: Pair(GuitarUtils.STRINGS.size, 0)
+            val human = when {
+                rawPosHuman.first in 1..GuitarUtils.STRINGS.size -> rawPosHuman.first
+                rawPosHuman.first in GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(rawPosHuman.first)
+                else -> rawPosHuman.first.coerceIn(1, GuitarUtils.STRINGS.size)
+            }
+            val rawPos = Pair(human, rawPosHuman.second)
+            if (!oldMap.containsKey(human)) oldMap[human] = rawPos
         }
 
         val newPitches = listOf(state.editedPrimaryMidi) + state.editableChordPitches
@@ -95,16 +99,16 @@ class WaveformEditorE2ETest {
         newPitches.forEachIndexed { idx, pitch ->
             val rawPos = newPositions.getOrNull(idx)
                 ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { Pair(it.first, it.second) }
-                ?: Pair(0, 0)
+                ?: Pair(GuitarUtils.indexToHuman(0), 0)
             val rawFirst = rawPos.first
-            // Prefer interpreting 1..N as human 1-based string numbers when ambiguous (match NoteEditorPanel)
-            val normIdx = when {
-                rawFirst in 1..GuitarUtils.STRINGS.size -> com.notenotes.util.GuitarUtils.humanToIndex(rawFirst) ?: 0
-                rawFirst in GuitarUtils.STRINGS.indices -> rawFirst
-                else -> com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { com.notenotes.util.GuitarUtils.humanToIndex(it.first) ?: 0 } ?: 0
+            // Prefer interpreting numeric values as human 1-based numbers when ambiguous (match NoteEditorPanel)
+            val human = when {
+                rawFirst in 1..GuitarUtils.STRINGS.size -> rawFirst
+                rawFirst in GuitarUtils.STRINGS.indices -> com.notenotes.util.GuitarUtils.indexToHuman(rawFirst)
+                else -> com.notenotes.util.GuitarUtils.fromMidi(pitch)?.first?.coerceIn(1, GuitarUtils.STRINGS.size) ?: 1
             }
-            val pos = Pair(normIdx, rawPos.second)
-            if (!newMap.containsKey(normIdx)) newMap[normIdx] = pos
+            val pos = Pair(human, rawPos.second)
+            if (!newMap.containsKey(human)) newMap[human] = pos
         }
 
         val unionStrings = (oldMap.keys + newMap.keys).toSortedSet()
@@ -113,7 +117,7 @@ class WaveformEditorE2ETest {
             val oldPos = oldMap[strIdx]
             val newPos = newMap[strIdx]
 
-            if (oldPos != null && newPos != null && oldPos == newPos) {
+                if (oldPos != null && newPos != null && oldPos == newPos) {
                 pendingMap[strIdx] = NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, oldPos.second, isStrikethrough = false)
             } else {
                 val oldAnnotated = if (oldPos != null) NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, oldPos.second, isStrikethrough = true, isPendingSmall = true) else androidx.compose.ui.text.AnnotatedString("")
@@ -132,10 +136,7 @@ class WaveformEditorE2ETest {
         assertEquals(1, overlays.size)
         val overlayMap = overlays[0].labelMap
 
-        println("oldMap=$oldMap")
-        println("newMap=$newMap")
-        println("pendingKeys=${pendingMap.keys}")
-        println("overlayKeys=${overlayMap.keys}")
+        
 
         // Pending keys should be present in the overlay label map (string indices align)
         for (k in pendingMap.keys) {

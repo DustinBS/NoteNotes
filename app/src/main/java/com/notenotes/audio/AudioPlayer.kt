@@ -6,6 +6,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
+import com.notenotes.audio.PlaybackUtils
 
 private const val TAG = "NNAudio"
 
@@ -14,6 +15,11 @@ private const val TAG = "NNAudio"
  * Uses Android's MediaPlayer for WAV/OGG playback.
  */
 class AudioPlayer {
+
+    init {
+        // Register so other screens can pause/stop players when loading new audio
+        PlaybackUtils.register(this)
+    }
 
     enum class PlaybackState {
         IDLE, PLAYING, PAUSED
@@ -39,7 +45,7 @@ class AudioPlayer {
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(file.absolutePath)
                 prepare()
-                try { mediaPlayer?.let { player -> player.playbackParams = player.playbackParams.setSpeed(currentSpeed) } } catch (e:Exception) {}
+                try { playbackParams = playbackParams.setSpeed(currentSpeed) } catch (e:Exception) {}
                 setOnCompletionListener {
                     Log.d(TAG, "AudioPlayer: Playback completed")
                     stopProgressPolling()
@@ -64,7 +70,7 @@ class AudioPlayer {
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(file.absolutePath)
                 prepare()
-                try { mediaPlayer?.let { player -> player.playbackParams = player.playbackParams.setSpeed(currentSpeed) } } catch (e:Exception) {}
+                try { playbackParams = playbackParams.setSpeed(currentSpeed) } catch (e:Exception) {}
                 setOnCompletionListener {
                     Log.d(TAG, "AudioPlayer: Playback completed")
                     stopProgressPolling()
@@ -99,6 +105,10 @@ class AudioPlayer {
      */
     fun resume() {
         mediaPlayer?.let {
+            try {
+                // Ensure resumed playback uses the currently selected speed.
+                it.playbackParams = it.playbackParams.setSpeed(currentSpeed)
+            } catch (_: Exception) {}
             it.start()
             _state.value = PlaybackState.PLAYING
             startProgressPolling()
@@ -180,9 +190,10 @@ class AudioPlayer {
      * Requires API 23+ (Android 6.0+), which is above our minSdk 26.
      */
     fun setPlaybackSpeed(speed: Float) {
+        // Always update the stored current speed so newly-created players use it.
+        currentSpeed = speed
         mediaPlayer?.let {
             try {
-                currentSpeed = speed
                 val params = it.playbackParams.setSpeed(speed)
                 it.playbackParams = params
                 Log.d(TAG, "AudioPlayer: Speed set to ${speed}x")
@@ -196,6 +207,7 @@ class AudioPlayer {
      * Release all resources. Call when the player is no longer needed.
      */
     fun release() {
+        try { PlaybackUtils.unregister(this) } catch (_: Exception) {}
         stop()
         playerScope.cancel()
     }

@@ -29,7 +29,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AlertDialog
@@ -165,16 +165,16 @@ internal fun computeStatsForIdeas(ideas: List<MelodyIdea>): StatsUiState {
             val chordSize = note.pitches.size
             chordSizeCounts[chordSize] = (chordSizeCounts[chordSize] ?: 0) + 1
 
-            // Prefer the canonical human 1-based view exposed by MusicalNote.safeTabPositions.
+            // Prefer the canonical human 1-based view exposed by MusicalNote.safeTabPositionsAsHuman.
             // If absent, fall back to fromMidi which returns a human string number.
-            val primaryHuman = note.safeTabPositions.firstOrNull() ?: com.notenotes.util.GuitarUtils.fromMidi(note.pitches.first())
+            val primaryHuman = note.safeTabPositionsAsHuman.firstOrNull() ?: com.notenotes.util.GuitarUtils.fromMidi(note.pitches.first())
             addStringUsageHuman(primaryHuman?.first, primaryHuman?.second, durationSec)
 
             if (note.isChord) {
                 note.pitches.indices.forEach { chordIndex ->
                     if (chordIndex == 0) return@forEach // skip primary pitch
                     val pitch = note.pitches[chordIndex]
-                    val chordHuman = note.safeTabPositions.getOrNull(chordIndex) ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)
+                    val chordHuman = note.safeTabPositionsAsHuman.getOrNull(chordIndex) ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)
                     addStringUsageHuman(chordHuman?.first, chordHuman?.second, durationSec)
                 }
             }
@@ -259,7 +259,12 @@ fun StatsScreen(
 ) {
     val context = LocalContext.current
     val ideas by viewModel.ideas.collectAsState()
-    var selectedIdeaIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    val prefsScope = remember { context.getSharedPreferences("notenotes_stats_scope", Context.MODE_PRIVATE) }
+    var selectedIdeaIds by remember {
+        val stored = prefsScope.getString("last_selected_ideas", "") ?: ""
+        val parsed = if (stored.isBlank()) emptySet() else stored.split(',').mapNotNull { it.toLongOrNull() }.toSet()
+        mutableStateOf(parsed)
+    }
     var showScopeSelector by remember { mutableStateOf(false) }
 
     val groupColorOverrides = remember(ideas) {
@@ -302,7 +307,7 @@ fun StatsScreen(
                 title = { Text("Statistics") },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -361,6 +366,8 @@ fun StatsScreen(
             onDismiss = { showScopeSelector = false },
             onApply = { selected ->
                 selectedIdeaIds = selected
+                // Persist user's last-picked scope for next session
+                prefsScope.edit().putString("last_selected_ideas", selected.joinToString(",")).apply()
                 showScopeSelector = false
             }
         )
@@ -799,8 +806,11 @@ private fun StringBarSection(
             )
             Spacer(modifier = Modifier.height(4.dp))
 
-            GuitarUtils.STRINGS.forEachIndexed { index, guitarString ->
-                val value = values.getOrNull(index) ?: 0f
+            // Iterate human 1-based strings so string 1 (high E) appears at the top
+            for (human in 1..GuitarUtils.STRINGS.size) {
+                val guitarString = GuitarUtils.stringForHuman(human)
+                val idx = com.notenotes.util.GuitarUtils.humanToIndex(human) ?: 0
+                val value = values.getOrNull(idx) ?: 0f
                 val fraction = (value / maxValue).coerceIn(0f, 1f)
                 val stringColor = Color(guitarString.colorArgb)
 

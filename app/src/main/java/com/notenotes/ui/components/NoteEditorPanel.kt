@@ -37,7 +37,7 @@ import com.notenotes.utils.NoteTextUtils
 data class EditorNote(
     val stringIndex: Int,  // 1-based human guitar string number (1 = High E, 6 = Low E)
     val fret: Int,
-    val midiPitch: Int = GuitarUtils.toMidi(stringIndex, fret)
+    val midiPitch: Int = GuitarUtils.toMidiHuman(stringIndex, fret)
 )
 
 /**
@@ -55,6 +55,7 @@ data class EditorNote(
 fun NoteEditorPanel(
     editCursorActive: Boolean,
     timePointSeconds: Float,
+    modifier: Modifier = Modifier,
     tempoBpm: Int = 120,
     onAddNote: (notes: List<Pair<Int, Pair<Int, Int>>>) -> Unit,
     onDeleteSelected: (() -> Unit)?,
@@ -69,8 +70,7 @@ fun NoteEditorPanel(
     isMoveMode: Boolean = false,
     onToggleMoveMode: (() -> Unit)? = null,
     onCopyFromNote: ((Int) -> Unit)? = null,
-    onPendingChangesChanged: ((Boolean, Map<Int, androidx.compose.ui.text.AnnotatedString>?) -> Unit)? = null,
-    modifier: Modifier = Modifier
+    onPendingChangesChanged: ((Boolean, Map<Int, androidx.compose.ui.text.AnnotatedString>?) -> Unit)? = null
 ) {
     val state = rememberGuitarChordEditState(selectedNote)
     var showCopyFromMenu by remember(selectedNoteIndex) { mutableStateOf(false) }
@@ -82,49 +82,43 @@ fun NoteEditorPanel(
                 val newPitches = listOf(state.editedPrimaryMidi) + state.editableChordPitches
                 val newPositions = listOf(Pair(state.editedPrimaryString, state.editedPrimaryFret)) + state.editableChordPositions
 
-                // Map by 0-based guitar string index -> tabPosition for old and new chords
+                // Map by human 1-based guitar string number -> tabPosition for old and new chords
                 val oldMap = linkedMapOf<Int, Pair<Int, Int>>()
                 selectedNote.pitches.forEachIndexed { idx, pitch ->
-                    // Prefer the index-aligned view from the model; fall back to fromMidi()
-                    val rawPosIndex = selectedNote.safeTabPositionsAsIndex.getOrNull(idx)
-                        ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { Pair(com.notenotes.util.GuitarUtils.rawToIndex(it.first) ?: 0, it.second) }
-                        ?: Pair(0, 0)
-                    val normIdx = rawPosIndex.first
-                    if (!oldMap.containsKey(normIdx)) oldMap[normIdx] = rawPosIndex
+                    // Prefer the human-aligned view from the model; fall back to fromMidi()
+                    val rawPosHuman = selectedNote.safeTabPositionsAsHuman.getOrNull(idx)
+                        ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)
+                        ?: Pair(GuitarUtils.STRINGS.size, 0)
+                    val human = rawPosHuman.first.coerceIn(1, GuitarUtils.STRINGS.size)
+                    if (!oldMap.containsKey(human)) oldMap[human] = Pair(human, rawPosHuman.second)
                 }
 
                 val newMap = linkedMapOf<Int, Pair<Int, Int>>()
                 newPitches.forEachIndexed { idx, pitch ->
                     val rawPos = newPositions.getOrNull(idx)
-                        ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { Pair(it.first, it.second) }
-                        ?: Pair(0, 0)
-                    val rawFirst = rawPos.first
-                    // Prefer interpreting 1..N as human 1-based string numbers when ambiguous.
-                    val normIdx = when {
-                        rawFirst in 1..GuitarUtils.STRINGS.size -> com.notenotes.util.GuitarUtils.humanToIndex(rawFirst) ?: 0
-                        rawFirst in GuitarUtils.STRINGS.indices -> rawFirst
-                        else -> com.notenotes.util.GuitarUtils.fromMidi(pitch)?.let { com.notenotes.util.GuitarUtils.humanToIndex(it.first) ?: 0 } ?: 0
-                    }
-                    val pos = Pair(normIdx, rawPos.second)
-                    if (!newMap.containsKey(normIdx)) newMap[normIdx] = pos
+                        ?: com.notenotes.util.GuitarUtils.fromMidi(pitch)
+                        ?: Pair(GuitarUtils.STRINGS.size, 0)
+                    val human = rawPos.first.coerceIn(1, GuitarUtils.STRINGS.size)
+                    val pos = Pair(human, rawPos.second)
+                    if (!newMap.containsKey(human)) newMap[human] = pos
                 }
 
                 val unionStrings = (oldMap.keys + newMap.keys).toSortedSet()
                 val map = linkedMapOf<Int, androidx.compose.ui.text.AnnotatedString>()
 
-                unionStrings.forEach { strIdx ->
-                    val oldPos = oldMap[strIdx]
-                    val newPos = newMap[strIdx]
+                unionStrings.forEach { humanStr ->
+                    val oldPos = oldMap[humanStr]
+                    val newPos = newMap[humanStr]
 
                     if (oldPos != null && newPos != null && oldPos == newPos) {
-                        map[strIdx] = NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, oldPos.second, isStrikethrough = false)
+                        map[humanStr] = NoteTextUtils.buildPitchFretAnnotatedFromPosition(humanStr, oldPos.second, isStrikethrough = false)
                     } else {
                         val oldAnnotated = if (oldPos != null) {
-                            NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, oldPos.second, isStrikethrough = true, isPendingSmall = true)
+                            NoteTextUtils.buildPitchFretAnnotatedFromPosition(humanStr, oldPos.second, isStrikethrough = true, isPendingSmall = true)
                         } else androidx.compose.ui.text.AnnotatedString("")
 
                         val newAnnotated = if (newPos != null) {
-                            NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, newPos.second, isStrikethrough = false)
+                            NoteTextUtils.buildPitchFretAnnotatedFromPosition(humanStr, newPos.second, isStrikethrough = false)
                         } else androidx.compose.ui.text.AnnotatedString("")
 
                         val combined = androidx.compose.ui.text.buildAnnotatedString {
@@ -132,7 +126,7 @@ fun NoteEditorPanel(
                             append(" ")
                             if (newAnnotated.text.isNotEmpty()) append(newAnnotated)
                         }
-                        map[strIdx] = combined
+                        map[humanStr] = combined
                     }
                 }
 
@@ -279,7 +273,7 @@ fun NoteEditorPanel(
                     } else {
                     Button(
                         onClick = {
-                            val targetMidi = GuitarUtils.toMidi(state.selectedStringIndex, state.selectedFret)
+                            val targetMidi = GuitarUtils.toMidiHuman(state.selectedStringIndex, state.selectedFret)
                             val pairs = listOf(Pair(targetMidi, Pair(state.selectedStringIndex, state.selectedFret)))
                             onAddNote(pairs)
                         },
@@ -341,7 +335,7 @@ fun CopyFromDialog(
             if (selectedNoteIndex == null || idx != selectedNoteIndex) {
                 // Ignore empty rest notes
                 if (!note.isRest && note.pitches.isNotEmpty()) {
-                    val key = note.pitches.joinToString(",") + "|" + note.tabPositions.joinToString(",") { "${it.first}-${it.second}" }
+                    val key = note.pitches.joinToString(",") + "|" + note.safeTabPositionsAsHuman.joinToString(",") { "${it.first}-${it.second}" }
                     if (!groups.containsKey(key)) {
                         groups[key] = idx
                     }
@@ -390,12 +384,12 @@ fun CopyFromDialog(
         
         if (prevIdx != null && prevIdx >= 0 && prevIdx < allNotes.size) {
             val note = allNotes[prevIdx]
-            val key = note.pitches.joinToString(",") + "|" + note.tabPositions.joinToString(",") { "${it.first}-${it.second}" }
+            val key = note.pitches.joinToString(",") + "|" + note.safeTabPositionsAsHuman.joinToString(",") { "${it.first}-${it.second}" }
             
             // Find in filtered list
             val targetIdxInFiltered = filteredIndices.indexOfFirst {
                 val n = allNotes[it]
-                val k = n.pitches.joinToString(",") + "|" + n.tabPositions.joinToString(",") { p -> "${p.first}-${p.second}" }
+                val k = n.pitches.joinToString(",") + "|" + n.safeTabPositionsAsHuman.joinToString(",") { p -> "${p.first}-${p.second}" }
                 k == key
             }
             if (targetIdxInFiltered >= 0) {

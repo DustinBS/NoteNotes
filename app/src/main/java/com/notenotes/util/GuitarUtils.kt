@@ -27,26 +27,6 @@ object GuitarUtils {
     const val MAX_FRET = 24
 
     /**
-     * Convert a guitar string + fret to a MIDI note number.
-     * Accepts either a 0-based index into `STRINGS` (0 = Low E / string 6)
-     * or a human 1-based string number (1 = High E). This keeps callers
-     * flexible while the canonical external representation uses 1..N.
-     * @param fret fret number 0–24
-     * @return MIDI note number
-     */
-    fun toMidi(stringIndex: Int, fret: Int): Int {
-        // Prefer interpreting 1..STRINGS.size as human 1-based numbers (1 = high E)
-        // to avoid ambiguity with zero-based indices 0..(n-1).
-        val idx = when {
-            stringIndex in 1..STRINGS.size -> STRINGS.size - stringIndex
-            stringIndex in STRINGS.indices -> stringIndex
-            else -> throw IllegalArgumentException("stringIndex must be 0..${STRINGS.size - 1} or 1..${STRINGS.size}")
-        }
-        require(fret in 0..MAX_FRET) { "fret must be 0–$MAX_FRET" }
-        return STRINGS[idx].openMidi + fret
-    }
-
-    /**
      * Try to find the best guitar position for a given MIDI note.
      * Returns a pair `(stringNumber, fret)` where `stringNumber` is human 1-based
      * (1 = High E, 6 = Low E). Returns null if not playable.
@@ -58,20 +38,6 @@ object GuitarUtils {
             if (fret in 0..MAX_FRET) return Pair(STRINGS.size - i, fret)
         }
         return null
-    }
-
-    /**
-     * Convert a raw value (either 0-based index or 1-based human string number)
-     * to the 0-based index used to access `STRINGS`.
-     * Returns null if the raw value is out of range.
-     */
-    fun rawToIndex(raw: Int): Int? {
-        // Prefer human 1-based mapping when ambiguous (1..size overlaps with 0..size-1)
-        return when {
-            raw in 1..STRINGS.size -> STRINGS.size - raw
-            raw in STRINGS.indices -> raw
-            else -> null
-        }
     }
 
     /**
@@ -90,11 +56,53 @@ object GuitarUtils {
     }
 
     /**
+     * Map a 0-based internal string index (0 = low E) to a display line index
+     * where 0 = top/highest string. Centralizes the "reverse index" logic.
+     */
+    fun indexToDisplayLine(index: Int): Int {
+        require(index in STRINGS.indices)
+        return STRINGS.size - 1 - index
+    }
+
+    /**
+     * Display-order strings (high-to-low) for UI consumers. Use this instead
+     * of calling `STRINGS.asReversed()` at call sites so we have a single place
+     * to adjust if ordering semantics change.
+     */
+    val DISPLAY_STRINGS: List<GuitarString>
+        get() = STRINGS.asReversed()
+
+    /**
      * Get the note name for a string + fret combination.
      */
     fun noteName(stringIndex: Int, fret: Int): String {
-        return PitchUtils.midiToNoteName(toMidi(stringIndex, fret))
+        // Interpret `stringIndex` as a human 1-based number for clarity.
+        return PitchUtils.midiToNoteName(toMidiHuman(stringIndex, fret))
     }
+
+    /**
+     * Return the GuitarString for a human 1-based string number (1 = High E).
+     */
+    fun stringForHuman(human: Int): GuitarString {
+        require(human in 1..STRINGS.size)
+        val idx = STRINGS.size - human
+        return STRINGS[idx]
+    }
+
+    /**
+     * Convert a human 1-based string number + fret to a MIDI note.
+     * This is the explicit one-based API that callers should prefer.
+     */
+    fun toMidiHuman(humanString: Int, fret: Int): Int {
+        val gs = stringForHuman(humanString)
+        require(fret in 0..MAX_FRET) { "fret must be 0–$MAX_FRET" }
+        return gs.openMidi + fret
+    }
+
+    /**
+     * Convenience: get the display note name for a human 1-based string + fret.
+     */
+    fun noteNameHuman(humanString: Int, fret: Int): String = PitchUtils.midiToNoteName(toMidiHuman(humanString, fret))
 
     /** Standard note durations for the editor. */
     data class NoteDuration(

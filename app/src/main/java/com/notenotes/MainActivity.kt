@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.navigation.compose.rememberNavController
 import com.notenotes.ui.NoteNotesNavHost
 import com.notenotes.ui.theme.NoteNotesTheme
+import com.notenotes.audio.PlaybackUtils
 
 private const val TAG = "NoteNotes"
 
@@ -37,5 +38,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStop() {
+        // Pause any active audio players when the app goes to background
+        // Do this before calling super to ensure playback pauses deterministically
+        PlaybackUtils.pauseAll()
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        // Ensure all playback is stopped when the activity is destroyed (app exit)
+        PlaybackUtils.stopAll()
+        super.onDestroy()
     }
 }

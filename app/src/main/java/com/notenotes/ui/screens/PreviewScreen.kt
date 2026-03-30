@@ -29,6 +29,7 @@ import com.notenotes.ui.components.SheetMusicWebView
 import com.notenotes.ui.components.TransportControls
 import com.notenotes.ui.components.WaveformView
 import com.notenotes.ui.components.NoteEditorPanel
+import com.notenotes.ui.components.StopPlaybackOnDispose
 import com.notenotes.processing.PitchAlgorithm
 import com.notenotes.model.KeySignature
 import com.notenotes.model.TimeSignature
@@ -254,6 +255,8 @@ fun PreviewScreen(
         viewModel.loadIdea(ideaId)
     }
 
+    // Stop playback when this composable leaves composition
+    StopPlaybackOnDispose { viewModel.stopPlayback() }
     // Auto-scroll window to follow playback
     LaunchedEffect(playbackProgress) {
         if (playbackState == AudioPlayer.PlaybackState.PLAYING) {
@@ -1243,9 +1246,9 @@ fun PreviewScreen(
                                     val entries = mutableListOf<Pair<Int, Pair<Int, Int>>>()
                                     source.pitches.indices.forEach { idx ->
                                         val pitch = source.pitches[idx]
-                                        val pos = source.safeTabPositions.getOrNull(idx) 
-                                            ?: GuitarUtils.fromMidi(pitch) 
-                                            ?: Pair(0, 0)
+                                            val pos = source.safeTabPositionsAsHuman.getOrNull(idx)
+                                                ?: GuitarUtils.fromMidi(pitch)
+                                                ?: Pair(GuitarUtils.STRINGS.size, 0)
                                         entries.add(Pair(pitch, pos))
                                     }
 

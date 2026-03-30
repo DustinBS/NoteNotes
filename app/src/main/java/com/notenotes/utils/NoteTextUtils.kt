@@ -15,9 +15,12 @@ object NoteTextUtils {
     private fun buildPitchEntries(note: MusicalNote): List<Triple<Int, Int, Int>> {
         val entries = mutableListOf<Triple<Int, Int, Int>>()
         note.pitches.forEachIndexed { i, pitch ->
-            // Use the index-aligned view so callers receive 0-based string indices
-            val sf = note.safeTabPositionsAsIndex.getOrNull(i) ?: Pair(0, 0)
-            entries.add(Triple(pitch, sf.first, sf.second))
+            // Treat stored tab positions as canonical human 1-based numbers and
+            // convert explicitly to a 0-based index for array access.
+            val sfHuman = note.safeTabPositionsAsHuman.getOrNull(i) ?: Pair(GuitarUtils.STRINGS.size, 0)
+            val human = sfHuman.first.coerceIn(1, GuitarUtils.STRINGS.size)
+            val idx = GuitarUtils.humanToIndex(human)!!
+            entries.add(Triple(pitch, idx, sfHuman.second))
         }
         return entries.sortedBy { it.first }
     }
@@ -93,10 +96,8 @@ object NoteTextUtils {
         saturated: Boolean = false
     ) = buildAnnotatedString {
         val entries = buildPitchEntries(note)
-        // Normalize the requested string identifier (accept 0-based index or 1-based human).
-        // Prefer a raw 0-based index when the caller passes an index directly; otherwise
-        // fall back to the more permissive raw->index helper which prefers human mapping.
-        val targetIdx = if (targetStringIndex in GuitarUtils.STRINGS.indices) targetStringIndex else com.notenotes.util.GuitarUtils.rawToIndex(targetStringIndex) ?: 0
+        // Callers must provide a human 1-based string number (1 = high E).
+        val targetIdx = GuitarUtils.humanToIndex(targetStringIndex.coerceIn(1, GuitarUtils.STRINGS.size))!!
         // Find all entries that map to the requested string index (usually 0 or 1 match)
         val matches = entries.filter { it.second == targetIdx }
         if (matches.isEmpty()) return@buildAnnotatedString
@@ -152,12 +153,9 @@ object NoteTextUtils {
         isPendingSmall: Boolean = false,
         saturated: Boolean = false
     ) = buildAnnotatedString {
-        
-        // Normalize incoming string identifier (accept 0-based index or 1-based human).
-        // If the caller already passed a 0-based index, prefer it to avoid
-        // misinterpreting ambiguous values (e.g. 5 which could be human 5 or index 5).
-        val idx = if (stringIndex in GuitarUtils.STRINGS.indices) stringIndex else com.notenotes.util.GuitarUtils.rawToIndex(stringIndex) ?: 0
-        val baseStringColor = if (idx in GuitarUtils.STRINGS.indices) Color(GuitarUtils.STRINGS[idx].colorArgb) else Color.Unspecified
+        // Treat the provided value as a human 1-based string number and clamp it.
+        val human = stringIndex.coerceIn(1, GuitarUtils.STRINGS.size)
+        val baseStringColor = try { Color(GuitarUtils.stringForHuman(human).colorArgb) } catch (_: Exception) { Color.Unspecified }
         val stringColor = if (isStrikethrough) Color.Gray
         else if (baseStringColor != Color.Unspecified) {
             if (saturated) baseStringColor else ColorUtils.lightenColor(baseStringColor)
@@ -176,11 +174,8 @@ object NoteTextUtils {
             else -> 9.sp
         }
 
-        // `idx` is already normalized above; compute MIDI from it.
-        // `GuitarUtils.toMidi` prefers human 1-based values when ambiguous,
-        // so convert the internal 0-based `idx` back to a human string number
-        // to ensure correct MIDI computation.
-        val midi = GuitarUtils.toMidi(GuitarUtils.indexToHuman(idx), fret)
+        // Compute MIDI using explicit human 1-based helper.
+        val midi = GuitarUtils.toMidiHuman(human, fret)
 
         withStyle(
             SpanStyle(

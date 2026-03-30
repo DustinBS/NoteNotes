@@ -34,6 +34,7 @@ import com.notenotes.audio.AudioRecorder
 import com.notenotes.model.InstrumentProfile
 import com.notenotes.ui.components.TransportControls
 import com.notenotes.ui.components.WaveformView
+import com.notenotes.ui.components.StopPlaybackOnDispose
 import com.notenotes.audio.AudioPlayer
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -124,6 +125,9 @@ fun RecordScreen(
         }
     }
 
+    // Stop playback when this composable leaves composition
+    StopPlaybackOnDispose { viewModel.stopPlayback() }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -155,7 +159,8 @@ fun RecordScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(24.dp),
+                // Reduce horizontal margins so transport controls expand wider
+                .padding(horizontal = 12.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             val currentDisplayProgress = if (uiState == RecordViewModel.UiState.RECORDING) recordHeadFraction else playbackProgress

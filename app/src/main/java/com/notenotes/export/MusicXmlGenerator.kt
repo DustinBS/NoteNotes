@@ -433,22 +433,11 @@ class MusicXmlGenerator {
             // Guitar tablature: <string> and <fret> in <technical>
             if (hasTabSingle) {
                 sb.appendLine("""          <technical>""")
-                // tabPositions may be stored either as canonical human 1-based
-                // string numbers (1 = High E) or as 0-based indices (0 = Low E).
-                // MusicXML expects 1..N with 1 = High E. Detect and convert.
+                // tabPositions are stored as canonical human 1-based string
+                // numbers (1 = High E). Clamp to valid range before emitting
+                // into MusicXML (which expects 1..N with 1 = High E).
                 val rawString = tabPos!!.first
-                val stringNum = when {
-                    // If this is a manually annotated note, prefer interpreting
-                    // small integers as 0-based indices (0 = low E) to match
-                    // internal manual storage conventions.
-                    note.isManual && rawString in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(rawString)
-                    // already human 1-based
-                    rawString in 1..GuitarUtils.STRINGS.size -> rawString
-                    // 0-based index -> convert to human
-                    rawString in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(rawString)
-                    // fallback: clamp into valid range
-                    else -> rawString.coerceIn(1, GuitarUtils.STRINGS.size)
-                }
+                val stringNum = rawString.coerceIn(1, GuitarUtils.STRINGS.size)
                 sb.appendLine("""            <string>$stringNum</string>""")
                 sb.appendLine("""            <fret>${tabPos.second}</fret>""")
                 sb.appendLine("""          </technical>""")

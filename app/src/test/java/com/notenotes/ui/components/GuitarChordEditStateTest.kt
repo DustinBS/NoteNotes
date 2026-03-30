@@ -11,7 +11,8 @@ class GuitarChordEditStateTest {
         // A note with primary on string 0 (High e) fret 0, and chord on string 1 fret 1
         val testNote = MusicalNote(
             pitches = listOf(40, 45), // random midi ints
-            tabPositions = listOf(Pair(0, 0), Pair(1, 1)),
+            // Use canonical human 1-based string numbers (1 = High E, 6 = Low E)
+            tabPositions = listOf(Pair(6, 0), Pair(5, 1)),
             durationTicks = 4,
             type = "quarter"
         )
@@ -42,7 +43,7 @@ class GuitarChordEditStateTest {
         // Note with primary and 2 chord notes
         val testNote = MusicalNote(
             pitches = listOf(40, 45, 50),
-            tabPositions = listOf(Pair(0, 0), Pair(1, 1), Pair(2, 2)),
+            tabPositions = listOf(Pair(6, 0), Pair(5, 1), Pair(4, 2)),
             durationTicks = 4,
             type = "quarter"
         )
@@ -67,7 +68,7 @@ class GuitarChordEditStateTest {
     fun testRemovePrimaryNote_NoChordNotesAvailable() {
         val testNote = MusicalNote(
             pitches = listOf(40),
-            tabPositions = listOf(Pair(0, 0)),
+            tabPositions = listOf(Pair(6, 0)),
             durationTicks = 4,
             type = "quarter"
         )

@@ -20,6 +20,7 @@ import com.notenotes.audio.AudioPlayer
 /**
  * DAW-style transport controls with global scrub bar and window navigation.
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun TransportControls(
     playbackState: AudioPlayer.PlaybackState,
@@ -27,6 +28,7 @@ fun TransportControls(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStop: () -> Unit,
+    modifier: Modifier = Modifier,
     durationMs: Int = 0,
     currentProgress: Float = 0f,
     onSeek: (Float) -> Unit = {},
@@ -40,8 +42,7 @@ fun TransportControls(
     onToggleLock: () -> Unit = {},
     // Speed controls
     playbackSpeed: Float = 1f,
-    onSpeedChange: (Float) -> Unit = {},
-    modifier: Modifier = Modifier
+    onSpeedChange: (Float) -> Unit = {}
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -112,7 +113,7 @@ fun TransportControls(
                     .weight(1f)
                     .horizontalScroll(rememberScrollState())
                     .padding(start = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 speedOptions.forEach { speed ->
@@ -124,8 +125,8 @@ fun TransportControls(
                     }
                     OutlinedButton(
                         onClick = { onSpeedChange(speed) },
-                        modifier = Modifier.height(32.dp).defaultMinSize(minWidth = 1.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                        modifier = Modifier.height(32.dp).defaultMinSize(minWidth = 48.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         shape = RoundedCornerShape(6.dp),
                         border = BorderStroke(
                             1.dp,

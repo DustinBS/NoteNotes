@@ -23,8 +23,8 @@ class WaveformViewTest {
         val overlays = computeNoteOverlays(listOf(note), tempoBpm = 120, durationMs = 1000, paddedDurationSec = 1f)
         assertEquals(1, overlays.size)
         val labelMap = overlays[0].labelMap
-        // internal index for string 1 (high E) == 5
-        assertTrue("Expected high E (internal index 5) to be present; found keys=${labelMap.keys}", labelMap.containsKey(5))
+        // human key for string 1 (high E) == 1
+        assertTrue("Expected high E (human 1) to be present; found keys=${labelMap.keys}", labelMap.containsKey(1))
     }
 
     @Test
@@ -41,7 +41,7 @@ class WaveformViewTest {
         val overlays = computeNoteOverlays(listOf(note), tempoBpm = 120, durationMs = 1000, paddedDurationSec = 1f)
         assertEquals(1, overlays.size)
         val labelMap = overlays[0].labelMap
-        assertTrue("Expected high E (internal index 5) to be present; found keys=${labelMap.keys}", labelMap.containsKey(5))
+        assertTrue("Expected high E (human 1) to be present; found keys=${labelMap.keys}", labelMap.containsKey(1))
     }
 
     @Test
@@ -57,12 +57,12 @@ class WaveformViewTest {
         val overlays = computeNoteOverlays(listOf(note), tempoBpm = 120, durationMs = 1000, paddedDurationSec = 1f)
         assertEquals(1, overlays.size)
         val labelMap = overlays[0].labelMap
-        // Expect only the two active strings to be present (internal indices 1 and 2)
+        // Expect only the two active strings to be present (human 5 and 4)
         assertEquals("Expected exactly 2 labeled strings; got=${labelMap.keys}", 2, labelMap.size)
-        assertTrue(labelMap.containsKey(1)) // internal index for human 5 (A)
-        assertTrue(labelMap.containsKey(2)) // internal index for human 4 (D)
+        assertTrue(labelMap.containsKey(5)) // human 5 (A)
+        assertTrue(labelMap.containsKey(4)) // human 4 (D)
         // Ensure other strings are not auto-filled
-        for (i in 0..5) if (i !in listOf(1, 2)) assertFalse("Unexpected filled string $i", labelMap.containsKey(i))
+        for (h in 1..6) if (h !in listOf(5, 4)) assertFalse("Unexpected filled string $h", labelMap.containsKey(h))
     }
 
     @Test

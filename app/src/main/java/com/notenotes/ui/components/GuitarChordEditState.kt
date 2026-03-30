@@ -21,36 +21,31 @@ class GuitarChordEditState(
     // Normalize incoming note tab positions (which may be stored as human or index) into human numbers.
     private val _initialHumanPositions: List<Pair<Int, Int>> = run {
         val note = originalNote ?: return@run emptyList()
-        val raw = note.safeTabPositions
-        if (raw.isNotEmpty() && raw.all { it.first in 1..GuitarUtils.STRINGS.size }) {
-            raw
-        } else {
-            // Fall back to index-aligned view and convert to human numbers
-            note.safeTabPositionsAsIndex.map { Pair(GuitarUtils.indexToHuman(it.first), it.second) }
-        }
+        // Use the canonical human view from the model which normalizes legacy data.
+        note.safeTabPositionsAsHuman
     }
 
-    var editedPrimaryString by mutableIntStateOf(_initialHumanPositions.firstOrNull()?.first ?: GuitarUtils.indexToHuman(0))
-    var editedPrimaryFret by mutableIntStateOf(originalNote?.safeTabPositionsAsIndex?.firstOrNull()?.second ?: 0)
+    var editedPrimaryString by mutableIntStateOf(_initialHumanPositions.firstOrNull()?.first ?: GuitarUtils.STRINGS.size)
+    var editedPrimaryFret by mutableIntStateOf(originalNote?.safeTabPositionsAsHuman?.firstOrNull()?.second ?: 0)
     
     val editableChordPitches: SnapshotStateList<Int> = mutableStateListOf()
     val editableChordPositions: SnapshotStateList<Pair<Int, Int>> = mutableStateListOf()
     
     // --- UI interaction state ---
-    var selectedStringIndex by mutableIntStateOf(_initialHumanPositions.firstOrNull()?.first ?: GuitarUtils.indexToHuman(0))
+    var selectedStringIndex by mutableIntStateOf(_initialHumanPositions.firstOrNull()?.first ?: GuitarUtils.STRINGS.size)
     var selectedFret by mutableIntStateOf(_initialHumanPositions.firstOrNull()?.second ?: 0)
     var editingChordPitchIndex by mutableStateOf<Int?>(null)
     
     // --- Original state for change detection ---
     // Original primary stored as human 1-based number
-    val originalPrimaryString: Int = _initialHumanPositions.firstOrNull()?.first ?: GuitarUtils.indexToHuman(0)
+    val originalPrimaryString: Int = _initialHumanPositions.firstOrNull()?.first ?: GuitarUtils.STRINGS.size
     val originalPrimaryFret: Int = _initialHumanPositions.firstOrNull()?.second ?: 0
     val originalPrimaryMidi: Int = originalNote?.pitches?.firstOrNull() ?: 0
     val originalChordPitches: List<Int> = originalNote?.pitches?.drop(1)?.toList() ?: emptyList()
-    val originalChordPositions: List<Pair<Int, Int>> = run {
+        val originalChordPositions: List<Pair<Int, Int>> = run {
         val note = originalNote ?: return@run emptyList()
         val pitches = note.pitches.drop(1)
-        val safeHuman = _initialHumanPositions.drop(1)
+            val safeHuman = _initialHumanPositions.drop(1)
         pitches.mapIndexed { i, pitch ->
             val stored = safeHuman.getOrNull(i)
             if (stored != null) stored
@@ -59,14 +54,14 @@ class GuitarChordEditState(
                 if (fm != null) {
                     val human = fm.first
                     Pair(human, fm.second)
-                } else Pair(GuitarUtils.indexToHuman(0), 0)
+                } else Pair(GuitarUtils.STRINGS.size, 0)
             }
         }
     }
     
     // --- Derived state ---
     val editedPrimaryMidi: Int
-        get() = GuitarUtils.toMidi(editedPrimaryString, editedPrimaryFret)
+        get() = GuitarUtils.toMidiHuman(editedPrimaryString, editedPrimaryFret)
     
     val hasPendingChanges: Boolean
         get() {
@@ -100,7 +95,7 @@ class GuitarChordEditState(
                     if (fm != null) {
                         editableChordPositions.add(Pair(fm.first, fm.second))
                     } else {
-                        editableChordPositions.add(Pair(GuitarUtils.indexToHuman(0), 0))
+                        editableChordPositions.add(Pair(GuitarUtils.STRINGS.size, 0))
                     }
                 }
             }
@@ -112,12 +107,8 @@ class GuitarChordEditState(
      */
     fun addChordNote(stringIndex: Int, fret: Int) {
         // Caller provides a human 1-based string number. Validate and coerce.
-        val human = when {
-            stringIndex in 1..GuitarUtils.STRINGS.size -> stringIndex
-            stringIndex in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(stringIndex)
-            else -> stringIndex.coerceIn(1, GuitarUtils.STRINGS.size)
-        }
-        val midiPitch = GuitarUtils.toMidi(human, fret)
+        val human = stringIndex.coerceIn(1, GuitarUtils.STRINGS.size)
+        val midiPitch = GuitarUtils.toMidiHuman(human, fret)
         editableChordPitches.add(midiPitch)
         editableChordPositions.add(Pair(human, fret))
         editingChordPitchIndex = editableChordPitches.size - 1
@@ -163,11 +154,7 @@ class GuitarChordEditState(
      */
     fun updateSelectedStringFret(stringIndex: Int, fret: Int) {
         // Caller provides human 1-based string number
-        val human = when {
-            stringIndex in 1..GuitarUtils.STRINGS.size -> stringIndex
-            stringIndex in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(stringIndex)
-            else -> stringIndex.coerceIn(1, GuitarUtils.STRINGS.size)
-        }
+        val human = stringIndex.coerceIn(1, GuitarUtils.STRINGS.size)
         selectedStringIndex = human
         selectedFret = fret
         
@@ -176,7 +163,7 @@ class GuitarChordEditState(
             editedPrimaryString = human
             editedPrimaryFret = fret
         } else if (idx in editableChordPitches.indices) {
-            val newMidi = GuitarUtils.toMidi(human, fret)
+            val newMidi = GuitarUtils.toMidiHuman(human, fret)
             editableChordPitches[idx] = newMidi
             editableChordPositions[idx] = Pair(human, fret)
         }
@@ -230,7 +217,7 @@ class GuitarChordEditState(
  */
 @Composable
 fun rememberGuitarChordEditState(initialNote: MusicalNote?): GuitarChordEditState {
-    return remember(initialNote?.pitches, initialNote?.tabPositions) {
+    return remember(initialNote?.pitches, initialNote?.safeTabPositionsAsHuman) {
         GuitarChordEditState(initialNote)
     }
 }

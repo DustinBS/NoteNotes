@@ -193,13 +193,10 @@ object MusicXmlSanitizer {
         val octave  = Regex("""<octave>(\d+)</octave>""").find(original)?.groupValues?.get(1)
         val voice   = Regex("""<voice>(\d+)</voice>""").find(original)?.groupValues?.get(1) ?: "1"
         val str     = if (keepTech) {
-            Regex("""<string>(\d+)</string>""").find(original)?.groupValues?.get(1)?.let { raw ->
+                Regex("""<string>(\d+)</string>""").find(original)?.groupValues?.get(1)?.let { raw ->
                 val r = raw.toIntOrNull() ?: return@let raw
-                val normalized = when {
-                    r in 1..GuitarUtils.STRINGS.size -> r
-                    r in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(r)
-                    else -> r.coerceIn(1, GuitarUtils.STRINGS.size)
-                }
+                // Normalize to canonical human 1-based string numbers.
+                val normalized = r.coerceIn(1, GuitarUtils.STRINGS.size)
                 normalized.toString()
             }
         } else null

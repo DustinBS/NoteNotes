@@ -1,11 +1,13 @@
 package com.notenotes.ui.screens
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.notenotes.audio.AudioPlayer
 import com.notenotes.audio.AudioRecorder
+import com.notenotes.audio.PlaybackUtils
 import com.notenotes.audio.WavReader
 import com.notenotes.audio.WavWriter
 import com.notenotes.data.AppDatabase
@@ -37,12 +39,12 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
         IDLE, RECORDING, PAUSED, RECORDING_FINISHED, PROCESSING, DONE, ERROR
     }
 
-    private val context = application.applicationContext
-    private val audioRecorder = AudioRecorder(context)
+    private val context: Context get() = getApplication<Application>().applicationContext
+    private val audioRecorder by lazy { AudioRecorder(context) }
     private val pipeline = TranscriptionPipeline()
     private val midiWriter = MidiWriter()
     private val musicXmlGenerator = MusicXmlGenerator()
-    private val dao = AppDatabase.getDatabase(context).melodyDao()
+    private val dao by lazy { AppDatabase.getDatabase(context).melodyDao() }
     private val gson = Gson()
 
     private val _uiState = MutableStateFlow(UiState.IDLE)
@@ -60,7 +62,7 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
     private val _selectedInstrument = MutableStateFlow(InstrumentProfile.GUITAR)
     val selectedInstrument: StateFlow<InstrumentProfile> = _selectedInstrument
 
-    private val prefs = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+    private val prefs by lazy { context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE) }
 
     private val _autoTranscribe = MutableStateFlow(prefs.getBoolean(KEY_AUTO_TRANSCRIBE, true))
     val autoTranscribe: StateFlow<Boolean> = _autoTranscribe
@@ -226,6 +228,9 @@ class RecordViewModel(application: Application) : AndroidViewModel(application) 
                             _punchInPositionMs.value = 0L
                             _isChanged.value = false
                             Log.i(TAG, "Loaded idea $ideaId for rerecord, ${shorts.size} samples")
+                            // Pause other players when preparing this idea for rerecord so
+                            // the user doesn't hear overlapping audio from other screens.
+                            PlaybackUtils.pauseOthers(audioPlayer)
                         } else {
                             Log.e(TAG, "Failed to read WAV samples for idea $ideaId")
                         }

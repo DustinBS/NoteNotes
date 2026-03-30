@@ -122,14 +122,14 @@ class MusicXmlParserTest {
     fun parse_preservesStringFrets() {
         val result = parser.parse(starshipXml)
         val note1 = result.notes[0]
-        // String/fret for chord members (0-based strings in our model)
-        // XML has string=4/fret=2, string=3/fret=2, string=2/fret=1
-        // After 6-x conversion: (2,2), (3,2), (4,1)
-        assertEquals(4, note1.tabPositions.size)
-        assertEquals(Pair(1, 0), note1.tabPositions[0])
-        assertEquals(Pair(2, 2), note1.tabPositions[1])
-        assertEquals(Pair(3, 2), note1.tabPositions[2])
-        assertEquals(Pair(4, 1), note1.tabPositions[3])
+      // String/fret for chord members (stored as human 1-based strings in the model)
+      // XML has string=4/fret=2, string=3/fret=2, string=2/fret=1
+      // Primary A2 is string=5 in human numbering; chord members become 4,3,2
+      assertEquals(4, note1.tabPositions.size)
+      assertEquals(Pair(5, 0), note1.tabPositions[0])
+      assertEquals(Pair(4, 2), note1.tabPositions[1])
+      assertEquals(Pair(3, 2), note1.tabPositions[2])
+      assertEquals(Pair(2, 1), note1.tabPositions[3])
     }
 
     @Test

@@ -323,7 +323,7 @@ private fun NoteNameRow(
             Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 val colWidth = 40.dp
                 val maxStrings = com.notenotes.util.GuitarUtils.STRINGS.size
-                for (si in 0 until maxStrings) {
+                for (si in 1..maxStrings) {
                     Box(modifier = Modifier.width(colWidth), contentAlignment = Alignment.CenterStart) {
                         val annotated = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotatedForString(note, si, saturated = true)
                         if (annotated != null && annotated.text.isNotEmpty()) {
@@ -342,7 +342,7 @@ private fun NoteNameRow(
             Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 val colWidth = 40.dp
                 val maxStrings = com.notenotes.util.GuitarUtils.STRINGS.size
-                for (si in 0 until maxStrings) {
+                for (si in 1..maxStrings) {
                     Box(modifier = Modifier.width(colWidth), contentAlignment = Alignment.CenterStart) {
                         val annotated = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotatedForString(note, si, saturated = true)
                         if (annotated.text.isNotEmpty()) {

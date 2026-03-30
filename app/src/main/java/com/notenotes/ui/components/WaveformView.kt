@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.notenotes.model.MusicalNote
 import com.notenotes.util.PitchUtils
+import com.notenotes.util.GuitarUtils
 import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
 
 /**
@@ -107,7 +108,8 @@ private data class DeferredLabel(
     val labelX: Float,
     val topY: Float,
     val effectiveTextStyle: TextStyle,
-    val stringIndex: Int
+    val stringIndex: Int,
+    val noteIndex: Int
 )
 
 /**
@@ -264,11 +266,8 @@ fun WaveformView(
                                             VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE)
                                         )
                                     } else {
-                                        @Suppress("DEPRECATION")
                                         val vibrator = context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? Vibrator
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                            vibrator?.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
-                                        }
+                                        vibrator?.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
                                     }
                                 } catch (_: Exception) {}
                             } else {
@@ -374,10 +373,15 @@ fun WaveformView(
         // us draw optional debug bounding boxes after everything is rendered.
         val deferredLabels = mutableListOf<DeferredLabel>()
 
-        for (overlay in noteOverlays) {
-            // Skip notes completely outside window
-            if (overlay.endFraction < windowStartFraction || overlay.startFraction > windowEndFraction) continue
+        // Split overlays into non-selected then selected so selected overlay boxes/borders
+        // are drawn after others (higher visual Z).
+        val visibleOverlays = noteOverlays.filter { overlay ->
+            !(overlay.endFraction < windowStartFraction || overlay.startFraction > windowEndFraction)
+        }
+        val nonSelectedOverlays = visibleOverlays.filter { it.noteIndex != selectedNoteIndex }
+        val selectedOverlays = visibleOverlays.filter { it.noteIndex == selectedNoteIndex }
 
+        fun renderOverlay(overlay: NoteOverlayItem) {
             // Map global fraction to window-local x
             val x1 = ((overlay.startFraction - windowStartFraction) / windowFractionSize * w).coerceAtLeast(0f)
             val x2 = ((overlay.endFraction - windowStartFraction) / windowFractionSize * w).coerceAtMost(w)
@@ -410,9 +414,9 @@ fun WaveformView(
             val labelX = x1 + 6f
 
             // Collect annotated strings for this overlay, preferring pending overrides for selected note.
-            val annotatedByString = (0 until maxStrings).associateWith { si ->
-                val pending = if (isSelected) pendingSelectedNoteLines?.get(si) else null
-                pending ?: overlay.labelMap[si]
+            val annotatedByString = (1..maxStrings).associateWith { human ->
+                val pending = if (isSelected) pendingSelectedNoteLines?.get(human) else null
+                pending ?: overlay.labelMap[human]
             }
 
             // Measure per-string heights using the default text style (12sp)
@@ -442,24 +446,28 @@ fun WaveformView(
 
             // Fixed six-row grid: place each string's label at its canonical row
             // (single notes behave like chords with one active string).
-            for (stringIndex in 0 until maxStrings) {
-                val annotated = annotatedByString[stringIndex]
+            for (human in 1..maxStrings) {
+                val annotated = annotatedByString[human]
                 if (annotated != null && annotated.text.isNotEmpty()) {
                     val measured = textMeasurer.measure(annotated, effectiveTextStyle)
-                    val centerY = waveTop + topMargin + (maxStrings - 1 - stringIndex).toFloat() * step
+                    // Place string 1 (human=1, high E) at the top, human=N at the bottom
+                    val centerY = waveTop + topMargin + (human - 1).toFloat() * step
                     val topY = centerY - measured.size.height / 2f
-                    val drawTopY = if (stringIndex == 0) {
+                    val drawTopY = if (human == maxStrings) {
                         // bottom row: flush with overlay bottom
                         (waveBottom - measured.size.height).coerceAtLeast(waveTop)
                     } else topY.coerceAtLeast(waveTop)
 
                     val fitsVertically = drawTopY + measured.size.height <= waveBottom + 1f
                     if (fitsVertically && labelX + measured.size.width.toFloat() < w && labelX >= 0f) {
-                        deferredLabels.add(DeferredLabel(annotated, labelX, drawTopY, effectiveTextStyle, stringIndex))
+                        deferredLabels.add(DeferredLabel(annotated, labelX, drawTopY, effectiveTextStyle, human, overlay.noteIndex))
                     }
                 }
             }
         }
+
+        for (overlay in nonSelectedOverlays) renderOverlay(overlay)
+        for (overlay in selectedOverlays) renderOverlay(overlay)
 
         // Draw time markers for the visible window
         if (durationSec > 0) {
@@ -625,14 +633,15 @@ fun WaveformView(
                 (c.blue * 255f).toInt().coerceIn(0, 255)
             )
 
-            for (lbl in deferredLabels) {
+            val sortedDeferred = if (selectedNoteIndex != null) deferredLabels.sortedBy { it.noteIndex == selectedNoteIndex } else deferredLabels
+            for (lbl in sortedDeferred) {
                 val full = lbl.annotated
                 var drawX = lbl.labelX
                 val topY = lbl.topY
                 val native = drawContext.canvas.nativeCanvas
 
-                // Compute a darker variant of the string color
-                val base = com.notenotes.util.GuitarUtils.STRINGS.getOrNull(lbl.stringIndex)?.let { androidx.compose.ui.graphics.Color(it.colorArgb) } ?: androidx.compose.ui.graphics.Color.Black
+                // Compute a darker variant of the string color (lbl.stringIndex is human 1-based)
+                val base = try { androidx.compose.ui.graphics.Color(com.notenotes.util.GuitarUtils.stringForHuman(lbl.stringIndex).colorArgb) } catch (_: Exception) { androidx.compose.ui.graphics.Color.Black }
                 val factor = 0.55f
                 val darkerForString = androidx.compose.ui.graphics.Color(
                     red = (base.red * factor).coerceIn(0f, 1f),
@@ -825,35 +834,32 @@ internal fun computeNoteOverlays(
         val startFraction = (noteStartSec / paddedDurationSec).coerceIn(0f, 1f)
         val endFraction = ((noteStartSec + noteDurationSec) / paddedDurationSec).coerceIn(0f, 1f)
 
-        // Build per-string annotated labels and store in a map keyed by guitar string index (0..5)
+        // Build per-string annotated labels and store in a map keyed by human guitar string number (1..6)
         val pairs = note.pitches.mapIndexed { i, p ->
-            // Use the index-aligned view; fallback to GuitarUtils.fromMidi (human) converted to index
-            val tpIndex = note.safeTabPositionsAsIndex.getOrNull(i) ?: run {
+            // Use the human-aligned view; fallback to GuitarUtils.fromMidi and normalize to human 1-based
+            val tpHuman = note.safeTabPositionsAsHuman.getOrNull(i) ?: run {
                 val fm = com.notenotes.util.GuitarUtils.fromMidi(p)
-                if (fm != null) {
-                    val human = fm.first
-                    val idx = com.notenotes.util.GuitarUtils.humanToIndex(human) ?: 0
-                    Pair(idx, fm.second)
-                } else Pair(0, 0)
+                if (fm != null) Pair(fm.first, fm.second) else Pair(GuitarUtils.STRINGS.size, 0)
             }
-            Triple(p, tpIndex.first, tpIndex.second)
+            val human = tpHuman.first.coerceIn(1, GuitarUtils.STRINGS.size)
+            Triple(p, human, tpHuman.second)
         }
 
         val labelMapMutable = mutableMapOf<Int, androidx.compose.ui.text.AnnotatedString>()
-        for ((_, strIdx, fret) in pairs) {
+        for ((_, strHuman, fret) in pairs) {
             // Build per-string annotated label using a central helper to avoid
             // creating temporary MusicalNote instances at call sites.
-            val annotated = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotatedFromPosition(strIdx, fret)
-            if (labelMapMutable.containsKey(strIdx)) {
-                val existing = labelMapMutable[strIdx]!!
+            val annotated = com.notenotes.utils.NoteTextUtils.buildPitchFretAnnotatedFromPosition(strHuman, fret)
+            if (labelMapMutable.containsKey(strHuman)) {
+                val existing = labelMapMutable[strHuman]!!
                 val combined = androidx.compose.ui.text.buildAnnotatedString {
                     append(existing)
                     append("/")
                     append(annotated)
                 }
-                labelMapMutable[strIdx] = combined
+                labelMapMutable[strHuman] = combined
             } else {
-                labelMapMutable[strIdx] = annotated
+                labelMapMutable[strHuman] = annotated
             }
         }
         // Do not auto-fill missing strings with open-string labels here.

@@ -23,11 +23,12 @@ class StatsComputationTest {
         // Primary note has no tab info: MIDI fallback should still attribute it to some guitar string.
         // Chord note has explicit tab info on string index 5 fret 0.
         val notes = listOf(
-            MusicalNote(
+                MusicalNote(
                 pitches = listOf(59, 64),
                 durationTicks = 4,
                 type = "quarter",
-                tabPositions = listOf(Pair(5, 0)),
+                // Use canonical human string number: 1 = High E
+                tabPositions = listOf(Pair(1, 0)),
                 isManual = true,
                 timePositionMs = 1000f
             )
@@ -63,7 +64,7 @@ class StatsComputationTest {
             groupId = "g2",
             groupName = "Group 2",
             tempo = 140,
-            notes = listOf(MusicalNote(listOf(64), 4, "quarter", tabPositions = listOf(Pair(5, 0)), isManual = true, timePositionMs = 0f))
+            notes = listOf(MusicalNote(listOf(64), 4, "quarter", tabPositions = listOf(Pair(1, 0)), isManual = true, timePositionMs = 0f))
         )
 
         val allStats = computeStatsForIdeas(listOf(ideaA, ideaB))

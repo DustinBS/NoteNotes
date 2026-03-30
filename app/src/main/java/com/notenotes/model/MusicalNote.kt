@@ -40,39 +40,21 @@ data class MusicalNote(
     val safeTabPositions: List<Pair<Int, Int>> get() = tabPositions
 
     /**
-     * Provides a view of `tabPositions` converted to internal 0-based string indices
-     * for UI/layout consumers. External/canonical `tabPositions` are stored as
-     * human 1-based string numbers (1 = High E). This property maps those to
-     * 0-based indices (0 = Low E) for convenience.
+     * Canonical view of `tabPositions` as human 1-based string numbers (1..6).
+     * Assumes stored `tabPositions` use human numbering; out-of-range values are coerced.
      */
-    val safeTabPositionsAsIndex: List<Pair<Int, Int>>
+    val safeTabPositionsAsHuman: List<Pair<Int, Int>>
         get() {
             val tps = safeTabPositions
-            // Detect representation heuristically:
-            // - If ALL first values are valid 0-based indices -> treat as indices.
-            // - Else if ALL first values are valid human numbers (1..size) -> treat as human.
-            // - Otherwise, fall back to treating presence of a 0 as index-based;
-            //   otherwise prefer human mapping. This balances compatibility with
-            //   tests that construct MusicalNote directly and JSON-loaded data.
-            val allIndices = tps.isNotEmpty() && tps.all { it.first in GuitarUtils.STRINGS.indices }
-            val allHumans = tps.isNotEmpty() && tps.all { it.first in 1..GuitarUtils.STRINGS.size }
-
             return tps.map { (s, f) ->
-                val idx = when {
-                    allHumans -> GuitarUtils.humanToIndex(s)!!
-                    allIndices -> if (s in GuitarUtils.STRINGS.indices) s else 0
-                    else -> {
-                        when {
-                            s == 0 -> 0
-                            s in 1..GuitarUtils.STRINGS.size -> GuitarUtils.humanToIndex(s)!!
-                            s in GuitarUtils.STRINGS.indices -> s
-                            else -> 0
-                        }
-                    }
-                }
-                Pair(idx, f)
+                val human = s.coerceIn(1, GuitarUtils.STRINGS.size)
+                Pair(human, f)
             }
         }
+
+    // Note: `safeTabPositionsAsIndex` removed — callers should convert from
+    // `safeTabPositionsAsHuman` via `GuitarUtils.humanToIndex(...)` when a
+    // 0-based index is required for UI rendering.
 
     /**
      * Sanitize this note after Gson deserialization.
@@ -84,7 +66,8 @@ data class MusicalNote(
         // Ensure tabPositions has entries for all pitches
         val fixedTps = if (tps.size < p.size) {
             p.mapIndexed { i, pitch ->
-                tps.getOrNull(i) ?: (if (!isRest) GuitarUtils.fromMidi(pitch) ?: Pair(0, 0) else Pair(0, 0))
+                // Prefer explicit canonical human string numbers as fallback
+                tps.getOrNull(i) ?: (if (!isRest) GuitarUtils.fromMidi(pitch) ?: Pair(GuitarUtils.STRINGS.size, 0) else Pair(GuitarUtils.STRINGS.size, 0))
             }
         } else {
             tps
@@ -120,41 +103,23 @@ class MusicalNoteAdapter : JsonDeserializer<MusicalNote>, JsonSerializer<Musical
 
         val tabPositions = mutableListOf<Pair<Int, Int>>()
         if (obj.has("guitarString") && !obj.get("guitarString").isJsonNull && obj.has("guitarFret") && !obj.get("guitarFret").isJsonNull) {
-            val string = obj.get("guitarString").asInt
+            val rawString = obj.get("guitarString").asInt
             val fret = obj.get("guitarFret").asInt
-            if (string != 0 || fret != 0) {
-                // Normalize incoming values to canonical human 1-based string numbers.
-                val human = when {
-                    string in 1..GuitarUtils.STRINGS.size -> string
-                    string in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(string)
-                    else -> string.coerceIn(1, GuitarUtils.STRINGS.size)
-                }
+            // Skip empty sentinel (0,0) if present; otherwise accept canonical human 1..N values.
+            if (!(rawString == 0 && fret == 0)) {
+                val human = rawString.coerceIn(1, GuitarUtils.STRINGS.size)
                 tabPositions.add(Pair(human, fret))
             }
         }
-        val incomingIsManual = if (obj.has("isManual")) obj.get("isManual").asBoolean else false
         if (obj.has("chordStringFrets") && obj.get("chordStringFrets").isJsonArray) {
             val csfArray = obj.get("chordStringFrets").asJsonArray
-            // Detect whether the provided first-values are 0-based indices or human 1-based numbers.
-            val firstValuesCsf = csfArray.mapNotNull {
-                try { it.asJsonObject.get("first").asInt } catch (_: Exception) { null }
-            }
-            val allIndicesCsf = firstValuesCsf.isNotEmpty() && firstValuesCsf.all { it in GuitarUtils.STRINGS.indices }
-            val allHumansCsf = firstValuesCsf.isNotEmpty() && firstValuesCsf.all { it in 1..GuitarUtils.STRINGS.size }
             csfArray.forEach {
                 try {
                     val pairObj = it.asJsonObject
                     if (pairObj.has("first") && pairObj.has("second")) {
                         val raw = pairObj.get("first").asInt
                         val fret = pairObj.get("second").asInt
-                        val human = when {
-                            incomingIsManual && allIndicesCsf -> GuitarUtils.indexToHuman(raw)
-                            allHumansCsf -> raw
-                            incomingIsManual && raw in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(raw)
-                            raw in 1..GuitarUtils.STRINGS.size -> raw
-                            raw in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(raw)
-                            else -> raw.coerceIn(1, GuitarUtils.STRINGS.size)
-                        }
+                        val human = raw.coerceIn(1, GuitarUtils.STRINGS.size)
                         tabPositions.add(Pair(human, fret))
                     }
                 } catch (e: Exception) {}
@@ -162,26 +127,16 @@ class MusicalNoteAdapter : JsonDeserializer<MusicalNote>, JsonSerializer<Musical
         }
         if (obj.has("tabPositions") && obj.get("tabPositions").isJsonArray) {
             val tpArray = obj.get("tabPositions").asJsonArray
-            val firstValues = tpArray.mapNotNull {
-                try { it.asJsonObject.get("first").asInt } catch (_: Exception) { null }
-            }
-            val allIndices = firstValues.isNotEmpty() && firstValues.all { it in GuitarUtils.STRINGS.indices }
-            val allHumans = firstValues.isNotEmpty() && firstValues.all { it in 1..GuitarUtils.STRINGS.size }
             tpArray.forEach { 
-                val pairObj = it.asJsonObject
-                if (pairObj.has("first") && pairObj.has("second")) {
-                    val raw = pairObj.get("first").asInt
-                    val fret = pairObj.get("second").asInt
-                    val human = when {
-                        incomingIsManual && allIndices -> GuitarUtils.indexToHuman(raw)
-                        allHumans -> raw
-                        incomingIsManual && raw in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(raw)
-                        raw in 1..GuitarUtils.STRINGS.size -> raw
-                        raw in GuitarUtils.STRINGS.indices -> GuitarUtils.indexToHuman(raw)
-                        else -> raw.coerceIn(1, GuitarUtils.STRINGS.size)
+                try {
+                    val pairObj = it.asJsonObject
+                    if (pairObj.has("first") && pairObj.has("second")) {
+                        val raw = pairObj.get("first").asInt
+                        val fret = pairObj.get("second").asInt
+                        val human = raw.coerceIn(1, GuitarUtils.STRINGS.size)
+                        tabPositions.add(Pair(human, fret))
                     }
-                    tabPositions.add(Pair(human, fret))
-                }
+                } catch (e: Exception) {}
             }
         }
 
